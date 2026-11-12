@@ -157,12 +157,10 @@ std::string DeviceTreeNode::getFullPath() const {
     for (const auto& component : pathComponents) {
         if (component != "/") {
             path += "/" + component;
-        } else {
-            path = "/";
         }
     }
     
-    return path;
+    return path.empty() ? "/" : path;
 }
 
 std::shared_ptr<DeviceTreeNode> DeviceTreeNode::findNodeByPath(const std::string& path) const {
