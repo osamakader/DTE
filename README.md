@@ -317,14 +317,20 @@ make
 
 ### Testing
 
-```bash
-# Run basic tests
-./bin/dte-cli --version
-./bin/dte-cli --help
+Unit and integration tests use GoogleTest and CTest. They are built
+automatically when GoogleTest is installed (`libgtest-dev` on Debian/Ubuntu,
+`gtest-devel` on Fedora, `gtest` on Arch). Integration tests that compile DTS
+fixtures need `dtc` and are skipped without it.
 
-# Test with sample files
-./bin/dte-cli info /proc/device-tree
-./bin/dte-cli validate sample.dts
+```bash
+cmake -S . -B build
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+
+# With AddressSanitizer + UndefinedBehaviorSanitizer
+cmake -S . -B build-asan -DDTE_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-asan -j$(nproc) --target dte-tests
+ctest --test-dir build-asan --output-on-failure
 ```
 
 ## Contributing
