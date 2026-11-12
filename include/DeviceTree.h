@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <variant>
+#include <cstdint>
 
 #ifdef HAVE_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
@@ -86,6 +87,14 @@ private:
     std::vector<DeviceTreeProperty> properties_;
 };
 
+// Entry of the DTB memory reservation block (/memreserve/ in DTS)
+struct MemoryReservation {
+    uint64_t address;
+    uint64_t size;
+
+    bool operator==(const MemoryReservation&) const = default;
+};
+
 // Device tree
 class DeviceTree {
 public:
@@ -102,7 +111,13 @@ public:
     // Source file information
     const std::string& getSourceFile() const { return sourceFile_; }
     void setSourceFile(const std::string& filename) { sourceFile_ = filename; }
-    
+
+    // DTB header metadata
+    const std::vector<MemoryReservation>& getMemoryReservations() const { return memoryReservations_; }
+    void setMemoryReservations(std::vector<MemoryReservation> reservations) { memoryReservations_ = std::move(reservations); }
+    uint32_t getBootCpuId() const { return bootCpuId_; }
+    void setBootCpuId(uint32_t id) { bootCpuId_ = id; }
+
     // Validation
     bool validate() const;
     std::vector<std::string> getValidationErrors() const;
@@ -119,6 +134,8 @@ public:
 private:
     std::shared_ptr<DeviceTreeNode> root_;
     std::string sourceFile_;
+    std::vector<MemoryReservation> memoryReservations_;
+    uint32_t bootCpuId_ = 0;
     mutable std::vector<std::string> validationErrors_;
     
     // Export helper methods

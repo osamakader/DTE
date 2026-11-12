@@ -248,8 +248,8 @@ bool DeviceTree::loadFromFile(const std::string& filename) {
         return false;
     }
     
-    // Copy the parsed tree data to this tree
-    root_ = parsedTree->getRoot();
+    // Take over the parsed tree, including header metadata
+    *this = *parsedTree;
     sourceFile_ = filename;
     return true;
 }
