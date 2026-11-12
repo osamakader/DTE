@@ -157,12 +157,10 @@ std::string DeviceTreeNode::getFullPath() const {
     for (const auto& component : pathComponents) {
         if (component != "/") {
             path += "/" + component;
-        } else {
-            path = "/";
         }
     }
     
-    return path;
+    return path.empty() ? "/" : path;
 }
 
 std::shared_ptr<DeviceTreeNode> DeviceTreeNode::findNodeByPath(const std::string& path) const {
@@ -248,8 +246,8 @@ bool DeviceTree::loadFromFile(const std::string& filename) {
         return false;
     }
     
-    // Copy the parsed tree data to this tree
-    root_ = parsedTree->getRoot();
+    // Take over the parsed tree, including header metadata
+    *this = *parsedTree;
     sourceFile_ = filename;
     return true;
 }

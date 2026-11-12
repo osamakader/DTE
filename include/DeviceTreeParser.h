@@ -15,20 +15,27 @@ public:
     virtual bool canParse(const std::string& filename) const = 0;
 };
 
-// DTB (Device Tree Blob) parser
+// DTB (Flattened Device Tree blob) parser.
+//
+// Implements the FDT format from the Devicetree Specification (versions
+// 16 and 17). All reads are bounds-checked, so malformed or truncated blobs
+// produce an error instead of undefined behaviour.
 class DTBParser : public DeviceTreeParser {
 public:
     std::shared_ptr<DeviceTree> parse(const std::string& filename) override;
     bool canParse(const std::string& filename) const override;
 
+    // Parse a blob that is already in memory. Returns nullptr on failure;
+    // the reason is available from lastError().
+    std::shared_ptr<DeviceTree> parseBuffer(const uint8_t* data, size_t size);
+    std::shared_ptr<DeviceTree> parseBuffer(const std::vector<uint8_t>& blob) {
+        return parseBuffer(blob.data(), blob.size());
+    }
+
+    const std::string& lastError() const { return lastError_; }
+
 private:
-    bool parseDTBFile(const std::string& filename, std::shared_ptr<DeviceTree> tree);
-    std::shared_ptr<DeviceTreeNode> parseDTBNode(const void* data, size_t offset, 
-                                                size_t& nextOffset, size_t stringsOffset,
-                                                bool isLittleEndian);
-    DeviceTreeProperty parseDTBProperty(const void* data, size_t offset, 
-                                       size_t& nextOffset, size_t stringsOffset,
-                                       bool isLittleEndian);
+    std::string lastError_;
 };
 
 // DTS (Device Tree Source) parser

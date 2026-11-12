@@ -38,6 +38,12 @@ endif()
 # Set compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2")
 
+option(DTE_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(DTE_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # Enable automoc for Qt
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -50,6 +56,12 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 # Add subdirectories
 add_subdirectory(src)
 add_subdirectory(cli)
+
+# Tests (ctest)
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 # Install targets
 install(TARGETS DeviceTreeExplorer DESTINATION bin)

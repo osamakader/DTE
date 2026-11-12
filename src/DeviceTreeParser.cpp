@@ -6,245 +6,355 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cassert>
+#include <cstdint>
+#include <iterator>
 
 namespace DTE {
 
 // DTBParser implementation
-std::shared_ptr<DeviceTree> DTBParser::parse(const std::string& filename) {
-    try {
-        auto tree = std::make_shared<DeviceTree>();
-        if (parseDTBFile(filename, tree)) {
-            tree->setSourceFile(filename);
-            return tree;
+namespace {
+
+// Flattened device tree constants (Devicetree Specification, chapter 5)
+constexpr uint32_t FDT_MAGIC = 0xd00dfeed;
+constexpr uint32_t FDT_BEGIN_NODE = 0x1;
+constexpr uint32_t FDT_END_NODE = 0x2;
+constexpr uint32_t FDT_PROP = 0x3;
+constexpr uint32_t FDT_NOP = 0x4;
+constexpr uint32_t FDT_END = 0x9;
+
+constexpr size_t FDT_V16_HEADER_SIZE = 36;
+constexpr size_t FDT_V17_HEADER_SIZE = 40;
+constexpr uint32_t FDT_FIRST_SUPPORTED_VERSION = 16;
+constexpr uint32_t FDT_LAST_SUPPORTED_VERSION = 17;
+
+std::string hex32(uint32_t v) {
+    std::ostringstream oss;
+    oss << "0x" << std::hex << v;
+    return oss.str();
+}
+
+[[noreturn]] void fail(const std::string& msg) {
+    throw std::runtime_error(msg);
+}
+
+// Bounds-checked big-endian reader over a byte range.
+class BlobReader {
+public:
+    BlobReader(const uint8_t* data, size_t size) : data_(data), size_(size) {}
+
+    size_t size() const { return size_; }
+
+    uint32_t be32(size_t off, const char* what) const {
+        if (off > size_ || size_ - off < 4) {
+            fail(std::string("Truncated blob reading ") + what + " at offset " + std::to_string(off));
         }
+        const uint8_t* p = data_ + off;
+        return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
+               (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+    }
+
+    uint64_t be64(size_t off, const char* what) const {
+        return (uint64_t(be32(off, what)) << 32) | be32(off + 4, what);
+    }
+
+    // Returns the NUL-terminated string starting at off; the terminator must
+    // lie inside [off, limit).
+    std::string cstr(size_t off, size_t limit, const char* what) const {
+        if (limit > size_) limit = size_;
+        if (off >= limit) {
+            fail(std::string(what) + " starts outside its block (offset " + std::to_string(off) + ")");
+        }
+        const void* nul = std::memchr(data_ + off, '\0', limit - off);
+        if (!nul) {
+            fail(std::string(what) + " is not NUL-terminated (offset " + std::to_string(off) + ")");
+        }
+        return std::string(reinterpret_cast<const char*>(data_ + off),
+                           static_cast<const uint8_t*>(nul) - (data_ + off));
+    }
+
+    const uint8_t* ptr(size_t off) const { return data_ + off; }
+
+private:
+    const uint8_t* data_;
+    size_t size_;
+};
+
+constexpr size_t align4(size_t v) { return (v + 3) & ~size_t(3); }
+
+// Checks that [off, off + len) lies inside [0, total) without overflow.
+bool rangeInside(uint64_t off, uint64_t len, uint64_t total) {
+    return off <= total && len <= total - off;
+}
+
+bool isPrintable(uint8_t c) { return c >= 0x20 && c <= 0x7e; }
+
+// Infer the most natural representation of a raw property value, using the
+// same heuristic as dtc's decompiler:
+//   - one or more non-empty printable NUL-terminated strings -> string
+//     (a string list is joined as `a", "b` so it renders like DTS source)
+//   - length multiple of 4 -> big-endian 32-bit cells
+//   - otherwise -> bytes
+PropertyValue inferPropertyValue(const uint8_t* data, size_t len) {
+    if (len == 0) {
+        return std::string();
+    }
+
+    if (data[len - 1] == '\0') {
+        bool ok = true;
+        size_t start = 0;
+        std::vector<std::string> parts;
+        for (size_t i = 0; i < len && ok; ++i) {
+            if (data[i] == '\0') {
+                if (i == start) {
+                    ok = false; // empty string segment
+                } else {
+                    parts.emplace_back(reinterpret_cast<const char*>(data + start), i - start);
+                    start = i + 1;
+                }
+            } else if (!isPrintable(data[i])) {
+                ok = false;
+            }
+        }
+        if (ok) {
+            std::string joined;
+            for (size_t i = 0; i < parts.size(); ++i) {
+                if (i > 0) joined += "\", \"";
+                joined += parts[i];
+            }
+            return joined;
+        }
+    }
+
+    if (len % 4 == 0) {
+        std::vector<uint32_t> cells(len / 4);
+        for (size_t i = 0; i < cells.size(); ++i) {
+            const uint8_t* p = data + i * 4;
+            cells[i] = (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
+                       (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+        }
+        return cells;
+    }
+
+    return std::vector<uint8_t>(data, data + len);
+}
+
+std::shared_ptr<DeviceTree> parseFdt(const uint8_t* data, size_t size) {
+    BlobReader blob(data, size);
+
+    if (size < FDT_V16_HEADER_SIZE) {
+        fail("File too small to be a DTB (" + std::to_string(size) + " bytes)");
+    }
+
+    const uint32_t magic = blob.be32(0, "magic");
+    if (magic != FDT_MAGIC) {
+        fail("Invalid DTB magic " + hex32(magic) + " (expected " + hex32(FDT_MAGIC) + ")");
+    }
+
+    const uint32_t totalsize = blob.be32(4, "totalsize");
+    const uint32_t offStruct = blob.be32(8, "off_dt_struct");
+    const uint32_t offStrings = blob.be32(12, "off_dt_strings");
+    const uint32_t offMemRsv = blob.be32(16, "off_mem_rsvmap");
+    const uint32_t version = blob.be32(20, "version");
+    const uint32_t lastCompVersion = blob.be32(24, "last_comp_version");
+    const uint32_t bootCpuId = blob.be32(28, "boot_cpuid_phys");
+    const uint32_t sizeStrings = blob.be32(32, "size_dt_strings");
+
+    if (version < FDT_FIRST_SUPPORTED_VERSION) {
+        fail("Unsupported DTB version " + std::to_string(version) +
+             " (need >= " + std::to_string(FDT_FIRST_SUPPORTED_VERSION) + ")");
+    }
+    if (lastCompVersion > FDT_LAST_SUPPORTED_VERSION) {
+        fail("DTB requires reader version " + std::to_string(lastCompVersion) +
+             " (supported up to " + std::to_string(FDT_LAST_SUPPORTED_VERSION) + ")");
+    }
+
+    const size_t headerSize = version >= 17 ? FDT_V17_HEADER_SIZE : FDT_V16_HEADER_SIZE;
+    if (totalsize < headerSize) {
+        fail("Header totalsize " + std::to_string(totalsize) + " is smaller than the header");
+    }
+    if (totalsize > size) {
+        fail("Blob truncated: header says " + std::to_string(totalsize) +
+             " bytes, only " + std::to_string(size) + " available");
+    }
+
+    // From here on only look at the first totalsize bytes.
+    BlobReader fdt(data, totalsize);
+
+    const uint32_t sizeStruct = version >= 17 ? fdt.be32(36, "size_dt_struct")
+                                              : totalsize - std::min(offStruct, totalsize);
+
+    if (offStruct % 4 != 0 || !rangeInside(offStruct, sizeStruct, totalsize) || offStruct < headerSize) {
+        fail("Structure block out of bounds or misaligned");
+    }
+    if (!rangeInside(offStrings, sizeStrings, totalsize) || offStrings < headerSize) {
+        fail("Strings block out of bounds");
+    }
+    if (offMemRsv % 8 != 0 || offMemRsv < headerSize || offMemRsv >= totalsize) {
+        fail("Memory reservation block out of bounds or misaligned");
+    }
+
+    auto tree = std::make_shared<DeviceTree>();
+    tree->setBootCpuId(bootCpuId);
+
+    // Memory reservation block: (address, size) pairs terminated by (0, 0).
+    std::vector<MemoryReservation> reservations;
+    for (size_t off = offMemRsv;; off += 16) {
+        if (!rangeInside(off, 16, totalsize)) {
+            fail("Memory reservation block is not terminated");
+        }
+        MemoryReservation r{fdt.be64(off, "memory reservation"),
+                            fdt.be64(off + 8, "memory reservation")};
+        if (r.address == 0 && r.size == 0) break;
+        reservations.push_back(r);
+    }
+    tree->setMemoryReservations(std::move(reservations));
+
+    // Structure block: walk tokens iteratively with an explicit node stack.
+    BlobReader st(fdt.ptr(offStruct), sizeStruct);
+    const size_t stringsEnd = size_t(offStrings) + sizeStrings;
+
+    std::vector<std::shared_ptr<DeviceTreeNode>> stack;
+    std::shared_ptr<DeviceTreeNode> root;
+    size_t pos = 0;
+
+    for (;;) {
+        const size_t tokenPos = pos;
+        const uint32_t token = st.be32(pos, "structure token");
+        pos += 4;
+
+        switch (token) {
+        case FDT_BEGIN_NODE: {
+            std::string name = st.cstr(pos, st.size(), "Node name");
+            pos = align4(pos + name.size() + 1);
+
+            if (stack.empty()) {
+                if (root) {
+                    fail("Multiple root nodes (second node at structure offset " +
+                         std::to_string(tokenPos) + ")");
+                }
+                // Root is "" in v16+ blobs; very old tools wrote "/".
+                if (!name.empty() && name != "/") {
+                    fail("Root node has unexpected name '" + name + "'");
+                }
+                root = std::make_shared<DeviceTreeNode>("/");
+                stack.push_back(root);
+            } else {
+                if (name.empty()) {
+                    fail("Empty node name at structure offset " + std::to_string(tokenPos));
+                }
+                auto node = std::make_shared<DeviceTreeNode>(name);
+                stack.back()->addChild(node);
+                stack.push_back(node);
+            }
+            break;
+        }
+
+        case FDT_END_NODE:
+            if (stack.empty()) {
+                fail("Unbalanced FDT_END_NODE at structure offset " + std::to_string(tokenPos));
+            }
+            stack.pop_back();
+            break;
+
+        case FDT_PROP: {
+            if (stack.empty()) {
+                fail("Property outside of any node at structure offset " + std::to_string(tokenPos));
+            }
+            const uint32_t len = st.be32(pos, "property length");
+            const uint32_t nameoff = st.be32(pos + 4, "property name offset");
+            pos += 8;
+
+            if (!rangeInside(pos, len, st.size())) {
+                fail("Property value at structure offset " + std::to_string(tokenPos) +
+                     " extends past the structure block");
+            }
+            if (nameoff >= sizeStrings) {
+                fail("Property name offset " + std::to_string(nameoff) +
+                     " outside strings block (size " + std::to_string(sizeStrings) + ")");
+            }
+            std::string name = fdt.cstr(size_t(offStrings) + nameoff, stringsEnd, "Property name");
+            if (name.empty()) {
+                fail("Empty property name at structure offset " + std::to_string(tokenPos));
+            }
+
+            stack.back()->addProperty(DeviceTreeProperty(name, inferPropertyValue(st.ptr(pos), len)));
+            pos = align4(pos + len);
+            break;
+        }
+
+        case FDT_NOP:
+            break;
+
+        case FDT_END:
+            if (!stack.empty()) {
+                fail("FDT_END reached with " + std::to_string(stack.size()) + " unclosed node(s)");
+            }
+            if (!root) {
+                fail("Structure block contains no root node");
+            }
+            tree->setRoot(root);
+            return tree;
+
+        default:
+            fail("Unknown structure token " + hex32(token) +
+                 " at structure offset " + std::to_string(tokenPos));
+        }
+    }
+}
+
+bool hasSuffix(const std::string& s, const std::string& suffix) {
+    return s.size() >= suffix.size() &&
+           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+} // namespace
+
+std::shared_ptr<DeviceTree> DTBParser::parseBuffer(const uint8_t* data, size_t size) {
+    lastError_.clear();
+    try {
+        return parseFdt(data, size);
     } catch (const std::exception& e) {
-        std::cerr << "DTB parsing error: " << e.what() << std::endl;
+        lastError_ = e.what();
     }
     return nullptr;
+}
+
+std::shared_ptr<DeviceTree> DTBParser::parse(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        lastError_ = "Cannot open file: " + filename;
+        std::cerr << "DTB parsing error: " << lastError_ << std::endl;
+        return nullptr;
+    }
+
+    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+
+    auto tree = parseBuffer(buffer);
+    if (!tree) {
+        std::cerr << "DTB parsing error: " << lastError_ << std::endl;
+        return nullptr;
+    }
+    tree->setSourceFile(filename);
+    return tree;
 }
 
 bool DTBParser::canParse(const std::string& filename) const {
-    // Check file extension
-    if (filename.find(".dtb") != std::string::npos) {
-        return true;
-    }
-    
-    // Check file magic
+    // Prefer content detection: the magic is stored big-endian.
     std::ifstream file(filename, std::ios::binary);
-    if (!file) return false;
-    
-    uint32_t magic;
-    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    
-    // DTB magic number: 0xd00dfeed (big-endian)
-    // Also check for little-endian: 0xedfe0dd0
-    return magic == 0xd00dfeed || magic == 0xedfe0dd0;
-}
-
-bool DTBParser::parseDTBFile(const std::string& filename, std::shared_ptr<DeviceTree> tree) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file) {
-        throw std::runtime_error("Cannot open file: " + filename);
-    }
-    
-    // Read file into memory
-    file.seekg(0, std::ios::end);
-    size_t fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-    
-    if (fileSize < 40) {
-        throw std::runtime_error("File too small to be a valid DTB");
-    }
-    
-    std::vector<char> buffer(fileSize);
-    file.read(buffer.data(), fileSize);
-    
-    if (file.gcount() != static_cast<std::streamsize>(fileSize)) {
-        throw std::runtime_error("Failed to read entire file");
-    }
-    
-    // Parse DTB header
-    const uint32_t* header = reinterpret_cast<const uint32_t*>(buffer.data());
-    uint32_t magic = header[0];
-    uint32_t totalsize = header[1];
-    uint32_t off_dt_struct = header[2];
-    uint32_t off_dt_strings = header[3];
-    uint32_t off_mem_rsvmap = header[4];
-    uint32_t version = header[5];
-    uint32_t last_comp_version = header[6];
-    uint32_t boot_cpuid_phys = header[7];
-    uint32_t size_dt_strings = header[8];
-    uint32_t size_dt_struct = header[9];
-    
-    // Validate magic number and handle endianness
-    bool isLittleEndian = false;
-    if (magic == 0xd00dfeed) {
-        isLittleEndian = false;
-    } else if (magic == 0xedfe0dd0) {
-        isLittleEndian = true;
-        // Convert header values to host endianness
-        totalsize = __builtin_bswap32(totalsize);
-        off_dt_struct = __builtin_bswap32(off_dt_struct);
-        off_dt_strings = __builtin_bswap32(off_dt_strings);
-        off_mem_rsvmap = __builtin_bswap32(off_mem_rsvmap);
-        version = __builtin_bswap32(version);
-        last_comp_version = __builtin_bswap32(last_comp_version);
-        boot_cpuid_phys = __builtin_bswap32(boot_cpuid_phys);
-        size_dt_strings = __builtin_bswap32(size_dt_strings);
-        size_dt_struct = __builtin_bswap32(size_dt_struct);
-    } else {
-        throw std::runtime_error("Invalid DTB magic number: 0x" + 
-                               std::to_string(magic));
-    }
-    
-    // Validate header values
-    if (totalsize != fileSize) {
-        throw std::runtime_error("File size mismatch: expected " + 
-                               std::to_string(totalsize) + ", got " + 
-                               std::to_string(fileSize));
-    }
-    
-    if (off_dt_struct >= fileSize || off_dt_strings >= fileSize || 
-        off_mem_rsvmap >= fileSize) {
-        throw std::runtime_error("Invalid offset in DTB header");
-    }
-    
-    if (off_dt_struct + size_dt_struct > fileSize) {
-        throw std::runtime_error("Structure block extends beyond file");
-    }
-    
-    if (off_dt_strings + size_dt_strings > fileSize) {
-        throw std::runtime_error("Strings block extends beyond file");
-    }
-    
-    // Validate version compatibility
-    if (version < 16) {
-        throw std::runtime_error("DTB version too old: " + std::to_string(version));
-    }
-    
-    if (version > 17) {
-        std::cerr << "Warning: DTB version " << version << " may not be fully supported" << std::endl;
-    }
-    
-    // Parse structure block
-    size_t structOffset = off_dt_struct;
-    size_t nextOffset = structOffset;
-    
-    auto rootNode = parseDTBNode(buffer.data(), structOffset, nextOffset, 
-                                off_dt_strings, isLittleEndian);
-    if (rootNode) {
-        tree->setRoot(rootNode);
-        return true;
-    }
-    
-    return false;
-}
-
-std::shared_ptr<DeviceTreeNode> DTBParser::parseDTBNode(const void* data, size_t offset, 
-                                                        size_t& nextOffset, size_t stringsOffset,
-                                                        bool isLittleEndian) {
-    const uint32_t* structData = reinterpret_cast<const uint32_t*>(static_cast<const char*>(data) + offset);
-    uint32_t token = isLittleEndian ? __builtin_bswap32(structData[0]) : structData[0];
-    
-    if (token == 0x00000001) { // FDT_BEGIN_NODE
-        // Parse node name
-        const char* nodeName = reinterpret_cast<const char*>(structData + 1);
-        
-        // Handle empty node names (root node)
-        std::string name = nodeName;
-        if (name.empty() || name == "/") {
-            name = "/";
-        }
-        
-        auto node = std::make_shared<DeviceTreeNode>(name);
-        
-        // Skip node name (including null terminator)
-        size_t nameLen = strlen(nodeName) + 1;
-        size_t nameWords = (nameLen + 3) / 4; // Round up to word boundary
-        size_t currentOffset = offset + 4 + nameWords * 4;
-        
-        // Parse properties and child nodes
-        while (currentOffset < nextOffset) {
-            const uint32_t* currentToken = reinterpret_cast<const uint32_t*>(static_cast<const char*>(data) + currentOffset);
-            uint32_t currentTokenValue = isLittleEndian ? __builtin_bswap32(currentToken[0]) : currentToken[0];
-            
-            if (currentTokenValue == 0x00000002) { // FDT_PROP
-                auto prop = parseDTBProperty(data, currentOffset, currentOffset, 
-                                           stringsOffset, isLittleEndian);
-                node->addProperty(prop);
-            } else if (currentTokenValue == 0x00000001) { // FDT_BEGIN_NODE
-                auto childNode = parseDTBNode(data, currentOffset, currentOffset, 
-                                            stringsOffset, isLittleEndian);
-                if (childNode) {
-                    node->addChild(childNode);
-                }
-            } else if (currentTokenValue == 0x00000003) { // FDT_END_NODE
-                currentOffset += 4;
-                break;
-            } else if (currentTokenValue == 0x00000009) { // FDT_END
-                break;
-            } else {
-                // Skip unknown tokens
-                currentOffset += 4;
+    if (file) {
+        uint8_t m[4] = {};
+        if (file.read(reinterpret_cast<char*>(m), 4)) {
+            uint32_t magic = (uint32_t(m[0]) << 24) | (uint32_t(m[1]) << 16) |
+                             (uint32_t(m[2]) << 8) | uint32_t(m[3]);
+            if (magic == FDT_MAGIC) {
+                return true;
             }
         }
-        
-        nextOffset = currentOffset;
-        return node;
     }
-    
-    return nullptr;
-}
 
-DeviceTreeProperty DTBParser::parseDTBProperty(const void* data, size_t offset, 
-                                              size_t& nextOffset, size_t stringsOffset,
-                                              bool isLittleEndian) {
-    const uint32_t* propData = reinterpret_cast<const uint32_t*>(static_cast<const char*>(data) + offset);
-    
-    // FDT_PROP token
-    uint32_t len = isLittleEndian ? __builtin_bswap32(propData[1]) : propData[1];
-    uint32_t nameoff = isLittleEndian ? __builtin_bswap32(propData[2]) : propData[2];
-    
-    // Validate string offset - simplified validation
-    if (nameoff >= 0x1000000) { // Reasonable upper limit
-        throw std::runtime_error("Invalid property name offset");
-    }
-    
-    // Get property name from strings block
-    const char* propName = static_cast<const char*>(data) + stringsOffset + nameoff;
-    
-    // Validate property name
-    if (strlen(propName) == 0) {
-        throw std::runtime_error("Empty property name");
-    }
-    
-    // Get property value
-    const char* propValue = reinterpret_cast<const char*>(propData + 3);
-    
-    // Create property value based on length and content
-    PropertyValue value;
-    if (len == 0) {
-        value = std::string("");
-    } else if (len > 0 && propValue[len - 1] == '\0') {
-        // String property - check if it's a valid string
-        std::string strValue(propValue, len - 1);
-        // Validate string contains only printable characters
-        if (std::all_of(strValue.begin(), strValue.end(), 
-                       [](char c) { return c >= 32 && c <= 126; })) {
-            value = strValue;
-        } else {
-            // Treat as binary if not a valid string
-            std::vector<uint8_t> binaryData(propValue, propValue + len);
-            value = binaryData;
-        }
-    } else {
-        // Binary property
-        std::vector<uint8_t> binaryData(propValue, propValue + len);
-        value = binaryData;
-    }
-    
-    nextOffset = offset + 12 + ((len + 3) / 4) * 4; // Round up to word boundary
-    return DeviceTreeProperty(propName, value);
+    // Fall back to the extension so a corrupt .dtb gets a DTB error message.
+    return hasSuffix(filename, ".dtb") || hasSuffix(filename, ".dtbo");
 }
 
 // DTSParser implementation
