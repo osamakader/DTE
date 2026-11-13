@@ -7,6 +7,7 @@ endif()
 add_executable(dte-tests
     DTBParserTest.cpp
     DTBIntegrationTest.cpp
+    DTSParserTest.cpp
     ProcessTest.cpp
 )
 
