@@ -37,7 +37,15 @@ A modern C++ and Qt application for visualizing and editing Device Tree (DTB/DTS
 - **C++20 compatible compiler** (GCC 10+, Clang 12+)
 - **CMake 3.16+**
 - **Qt6** (Core, Widgets, Gui)
-- **Device Tree Compiler (dtc)** - for validation and conversion
+- **Device Tree Compiler (dtc)** - required at runtime to load DTS files and to convert between formats
+- **C preprocessor (cpp)** - only for DTS files that use `#include`/`#define` (e.g. Linux kernel sources)
+
+DTS files are compiled with `dtc` and then read with the built-in DTB parser,
+so the full DTS language is supported and a DTS file loads exactly like its
+compiled DTB. Files containing C preprocessor directives are first run through
+`cpp -x assembler-with-cpp`, like the kernel build does; the file's directory
+and its `include/` subdirectory are on the include path. Set `DTE_DTC` or
+`DTE_CPP` to use a specific `dtc` or `cpp` binary.
 
 ### Building from Source
 
