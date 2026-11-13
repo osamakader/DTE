@@ -44,7 +44,9 @@ public:
 // Compiles the source with dtc and parses the resulting blob with
 // DTBParser, so the full DTS language is supported (labels, references,
 // /include/, /memreserve/, overrides, /delete-node/, expressions, ...)
-// and a DTS file loads exactly like its compiled DTB.
+// and a DTS file loads exactly like its compiled DTB. Files that use C
+// preprocessor directives are run through cpp first, as the Linux kernel
+// build does.
 class DTSParser : public DeviceTreeParser {
 public:
     std::shared_ptr<DeviceTree> parse(const std::string& filename) override;
@@ -53,8 +55,19 @@ public:
     // Warnings dtc printed during the last successful parse.
     const std::string& lastWarnings() const { return lastWarnings_; }
 
+    // Extra directories searched by #include (C preprocessor) and
+    // /include/ (dtc). The source file's directory and its include/
+    // subdirectory are always searched first.
+    void setIncludePaths(std::vector<std::string> paths) { includePaths_ = std::move(paths); }
+    const std::vector<std::string>& includePaths() const { return includePaths_; }
+
+    // True if the file uses C preprocessor directives (#include, #define,
+    // #if...) and so must go through cpp before dtc.
+    static bool needsPreprocessing(const std::string& filename);
+
 private:
     std::string lastWarnings_;
+    std::vector<std::string> includePaths_;
 };
 
 // Parser factory

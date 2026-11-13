@@ -123,4 +123,9 @@ std::string dtcExecutable() {
     return (env && *env) ? env : "dtc";
 }
 
+std::string cppExecutable() {
+    const char* env = std::getenv("DTE_CPP");
+    return (env && *env) ? env : "cpp";
+}
+
 } // namespace DTE

@@ -25,6 +25,9 @@ ProcessResult runProcess(const std::vector<std::string>& argv);
 // Path or name of the dtc executable: $DTE_DTC if set, otherwise "dtc".
 std::string dtcExecutable();
 
+// Path or name of the C preprocessor: $DTE_CPP if set, otherwise "cpp".
+std::string cppExecutable();
+
 } // namespace DTE
 
 #endif // DTE_PROCESS_H

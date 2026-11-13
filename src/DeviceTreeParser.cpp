@@ -9,6 +9,9 @@
 #include <cassert>
 #include <cstdint>
 #include <iterator>
+#include <regex>
+#include <cstdlib>
+#include <unistd.h>
 
 namespace DTE {
 
@@ -359,36 +362,127 @@ bool DTBParser::canParse(const std::string& filename) const {
 }
 
 // DTSParser implementation
+namespace {
+
+// Temporary file removed on destruction.
+class TempFile {
+public:
+    TempFile() = default;
+    ~TempFile() {
+        if (!path_.empty()) ::unlink(path_.c_str());
+    }
+    TempFile(const TempFile&) = delete;
+    TempFile& operator=(const TempFile&) = delete;
+
+    bool create(const std::string& suffix) {
+        const char* dir = std::getenv("TMPDIR");
+        std::string tmpl = std::string(dir && *dir ? dir : "/tmp") + "/dte-XXXXXX" + suffix;
+        int fd = ::mkstemps(tmpl.data(), static_cast<int>(suffix.size()));
+        if (fd < 0) return false;
+        ::close(fd);
+        path_ = tmpl;
+        return true;
+    }
+
+    const std::string& path() const { return path_; }
+
+private:
+    std::string path_;
+};
+
+std::string directoryOf(const std::string& filename) {
+    auto slash = filename.find_last_of('/');
+    if (slash == std::string::npos) return ".";
+    if (slash == 0) return "/";
+    return filename.substr(0, slash);
+}
+
+} // namespace
+
+bool DTSParser::needsPreprocessing(const std::string& filename) {
+    static const std::regex directive(
+        R"(^\s*#\s*(include|define|undef|if|ifdef|ifndef|elif|else|endif|error|warning|pragma|line)\b)");
+    std::ifstream file(filename);
+    std::string line;
+    while (std::getline(file, line)) {
+        if (std::regex_search(line, directive)) return true;
+    }
+    return false;
+}
+
 std::shared_ptr<DeviceTree> DTSParser::parse(const std::string& filename) {
     lastError_.clear();
     lastWarnings_.clear();
 
+    auto finish = [&](std::string error) -> std::shared_ptr<DeviceTree> {
+        while (!error.empty() && error.back() == '\n') error.pop_back();
+        lastError_ = std::move(error);
+        std::cerr << "DTS parsing error: " << lastError_ << std::endl;
+        return nullptr;
+    };
+
     if (!std::ifstream(filename)) {
-        lastError_ = "Cannot open file: " + filename;
-    } else {
-        auto r = runProcess({dtcExecutable(), "-I", "dts", "-O", "dtb", filename});
-        if (!r.launched) {
-            lastError_ = r.error + " (DTS files are compiled with dtc; install "
-                         "device-tree-compiler or set DTE_DTC)";
-        } else if (!r.ok()) {
-            lastError_ = r.stderrData.empty() ? "dtc failed with exit code " + std::to_string(r.exitCode)
-                                              : r.stderrData;
-            while (!lastError_.empty() && lastError_.back() == '\n') lastError_.pop_back();
-        } else {
-            DTBParser dtb;
-            auto tree = dtb.parseBuffer(reinterpret_cast<const uint8_t*>(r.stdoutData.data()),
-                                        r.stdoutData.size());
-            if (tree) {
-                lastWarnings_ = r.stderrData;
-                tree->setSourceFile(filename);
-                return tree;
-            }
-            lastError_ = "Could not read dtc output: " + dtb.lastError();
-        }
+        return finish("Cannot open file: " + filename);
     }
 
-    std::cerr << "DTS parsing error: " << lastError_ << std::endl;
-    return nullptr;
+    const std::string dir = directoryOf(filename);
+    std::vector<std::string> searchDirs{dir, dir + "/include"};
+    searchDirs.insert(searchDirs.end(), includePaths_.begin(), includePaths_.end());
+
+    // Optional C preprocessing step. cpp emits line markers, so dtc's
+    // error locations still refer to the original files.
+    std::string dtcInput = filename;
+    TempFile preprocessed;
+    if (needsPreprocessing(filename)) {
+        if (!preprocessed.create(".dts")) {
+            return finish("Cannot create temporary file for preprocessing");
+        }
+        std::vector<std::string> argv{cppExecutable(), "-nostdinc", "-undef", "-D__DTS__",
+                                      "-x", "assembler-with-cpp"};
+        for (const auto& d : searchDirs) {
+            argv.push_back("-I");
+            argv.push_back(d);
+        }
+        argv.insert(argv.end(), {"-o", preprocessed.path(), filename});
+
+        auto r = runProcess(argv);
+        if (!r.launched) {
+            return finish(r.error + " (this file uses #include/#define and needs the C preprocessor; "
+                          "install cpp or set DTE_CPP)");
+        }
+        if (!r.ok()) {
+            return finish(r.stderrData.empty() ? "cpp failed with exit code " + std::to_string(r.exitCode)
+                                               : r.stderrData);
+        }
+        dtcInput = preprocessed.path();
+    }
+
+    std::vector<std::string> argv{dtcExecutable(), "-I", "dts", "-O", "dtb"};
+    for (const auto& d : searchDirs) {
+        argv.push_back("-i");
+        argv.push_back(d);
+    }
+    argv.push_back(dtcInput);
+
+    auto r = runProcess(argv);
+    if (!r.launched) {
+        return finish(r.error + " (DTS files are compiled with dtc; install "
+                      "device-tree-compiler or set DTE_DTC)");
+    }
+    if (!r.ok()) {
+        return finish(r.stderrData.empty() ? "dtc failed with exit code " + std::to_string(r.exitCode)
+                                           : r.stderrData);
+    }
+
+    DTBParser dtb;
+    auto tree = dtb.parseBuffer(reinterpret_cast<const uint8_t*>(r.stdoutData.data()),
+                                r.stdoutData.size());
+    if (!tree) {
+        return finish("Could not read dtc output: " + dtb.lastError());
+    }
+    lastWarnings_ = r.stderrData;
+    tree->setSourceFile(filename);
+    return tree;
 }
 
 bool DTSParser::canParse(const std::string& filename) const {
