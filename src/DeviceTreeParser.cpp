@@ -1,4 +1,5 @@
 #include "DeviceTreeParser.h"
+#include "Process.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -615,68 +616,56 @@ std::vector<std::unique_ptr<DeviceTreeParser>> DeviceTreeParserFactory::getAllPa
 // DeviceTreeUtils implementation
 namespace DeviceTreeUtils {
 
+namespace {
+
+bool runDtc(const std::vector<std::string>& args) {
+    std::vector<std::string> argv{dtcExecutable()};
+    argv.insert(argv.end(), args.begin(), args.end());
+    auto r = runProcess(argv);
+    if (!r.launched) {
+        std::cerr << "Error: " << r.error << " (install device-tree-compiler or set DTE_DTC)" << std::endl;
+        return false;
+    }
+    if (!r.ok() && !r.stderrData.empty()) {
+        std::cerr << r.stderrData;
+    }
+    return r.ok();
+}
+
+} // namespace
+
 bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile) {
-#ifdef HAVE_DTC
-    // Use system dtc command
-    std::string command = "dtc -I dtb -O dts -o " + dtsFile + " " + dtbFile + " 2>/dev/null";
-    return system(command.c_str()) == 0;
-#else
-    std::cerr << "Warning: dtc not available - conversion not supported" << std::endl;
-    return false;
-#endif
+    return runDtc({"-q", "-I", "dtb", "-O", "dts", "-o", dtsFile, dtbFile});
 }
 
 bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile) {
-#ifdef HAVE_DTC
-    // Use system dtc command
-    std::string command = "dtc -I dts -O dtb -o " + dtbFile + " " + dtsFile + " 2>/dev/null";
-    return system(command.c_str()) == 0;
-#else
-    std::cerr << "Warning: dtc not available - conversion not supported" << std::endl;
-    return false;
-#endif
+    return runDtc({"-q", "-I", "dts", "-O", "dtb", "-o", dtbFile, dtsFile});
 }
 
 bool validateDeviceTree(const std::string& filename) {
-#ifdef HAVE_DTC
-    // Use system dtc command for validation
-    std::string command = "dtc -I dts -O dts " + filename + " >/dev/null 2>&1";
-    return system(command.c_str()) == 0;
-#else
-    std::cerr << "Warning: dtc not available - using basic validation only" << std::endl;
-    // Basic validation without dtc
-    std::ifstream file(filename);
-    return file.good();
-#endif
+    auto parser = DeviceTreeParserFactory::createParser(filename);
+    const std::string inputFormat = dynamic_cast<DTBParser*>(parser.get()) ? "dtb" : "dts";
+    return runDtc({"-q", "-I", inputFormat, "-O", "dtb", "-o", "/dev/null", filename});
 }
 
 std::string getDeviceTreeInfo(const std::string& filename) {
-#ifdef HAVE_DTC
-    // Use system dtc command to get info
-    std::string command = "dtc -I dts -O dts " + filename + " 2>&1";
-    
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) return "";
-    
-    std::string result;
-    char buffer[128];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
+    auto parser = DeviceTreeParserFactory::createParser(filename);
+    const std::string inputFormat = dynamic_cast<DTBParser*>(parser.get()) ? "dtb" : "dts";
+    auto r = runProcess({dtcExecutable(), "-I", inputFormat, "-O", "dts", filename});
+    if (!r.launched) {
+        return r.error;
     }
-    
-    pclose(pipe);
-    return result;
-#else
-    return "dtc not available - limited information";
-#endif
+    return r.stdoutData + r.stderrData;
 }
 
 bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile) {
-    // Use system command to extract device tree from kernel
-    std::string command = "scripts/extract-dtb.py -o " + outputFile + " " + kernelFile + " 2>/dev/null";
-    return system(command.c_str()) == 0;
+    auto r = runProcess({"extract-dtb.py", "-o", outputFile, kernelFile});
+    if (!r.launched) {
+        std::cerr << "Error: " << r.error << std::endl;
+    }
+    return r.ok();
 }
 
 } // namespace DeviceTreeUtils
 
-} // namespace DTE 
+} // namespace DTE

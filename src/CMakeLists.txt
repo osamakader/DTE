@@ -2,6 +2,7 @@
 add_library(dte-core STATIC
     DeviceTree.cpp
     DeviceTreeParser.cpp
+    Process.cpp
     DeviceTreeDiff.cpp
 )
 
