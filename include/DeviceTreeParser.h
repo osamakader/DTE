@@ -13,6 +13,12 @@ public:
     virtual ~DeviceTreeParser() = default;
     virtual std::shared_ptr<DeviceTree> parse(const std::string& filename) = 0;
     virtual bool canParse(const std::string& filename) const = 0;
+
+    // Reason for the last parse failure (empty after a successful parse).
+    const std::string& lastError() const { return lastError_; }
+
+protected:
+    std::string lastError_;
 };
 
 // DTB (Flattened Device Tree blob) parser.
@@ -31,24 +37,24 @@ public:
     std::shared_ptr<DeviceTree> parseBuffer(const std::vector<uint8_t>& blob) {
         return parseBuffer(blob.data(), blob.size());
     }
-
-    const std::string& lastError() const { return lastError_; }
-
-private:
-    std::string lastError_;
 };
 
-// DTS (Device Tree Source) parser
+// DTS (Device Tree Source) parser.
+//
+// Compiles the source with dtc and parses the resulting blob with
+// DTBParser, so the full DTS language is supported (labels, references,
+// /include/, /memreserve/, overrides, /delete-node/, expressions, ...)
+// and a DTS file loads exactly like its compiled DTB.
 class DTSParser : public DeviceTreeParser {
 public:
     std::shared_ptr<DeviceTree> parse(const std::string& filename) override;
     bool canParse(const std::string& filename) const override;
 
+    // Warnings dtc printed during the last successful parse.
+    const std::string& lastWarnings() const { return lastWarnings_; }
+
 private:
-    bool parseDTSFile(const std::string& filename, std::shared_ptr<DeviceTree> tree);
-    std::shared_ptr<DeviceTreeNode> parseDTSNode(std::istream& stream, std::string& line);
-    DeviceTreeProperty parseDTSProperty(std::istream& stream, std::string& line);
-    std::string parseDTSValue(std::istream& stream, std::string& line);
+    std::string lastWarnings_;
 };
 
 // Parser factory

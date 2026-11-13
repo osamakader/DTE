@@ -360,237 +360,40 @@ bool DTBParser::canParse(const std::string& filename) const {
 
 // DTSParser implementation
 std::shared_ptr<DeviceTree> DTSParser::parse(const std::string& filename) {
-    try {
-        auto tree = std::make_shared<DeviceTree>();
-        if (parseDTSFile(filename, tree)) {
-            tree->setSourceFile(filename);
-            return tree;
+    lastError_.clear();
+    lastWarnings_.clear();
+
+    if (!std::ifstream(filename)) {
+        lastError_ = "Cannot open file: " + filename;
+    } else {
+        auto r = runProcess({dtcExecutable(), "-I", "dts", "-O", "dtb", filename});
+        if (!r.launched) {
+            lastError_ = r.error + " (DTS files are compiled with dtc; install "
+                         "device-tree-compiler or set DTE_DTC)";
+        } else if (!r.ok()) {
+            lastError_ = r.stderrData.empty() ? "dtc failed with exit code " + std::to_string(r.exitCode)
+                                              : r.stderrData;
+            while (!lastError_.empty() && lastError_.back() == '\n') lastError_.pop_back();
+        } else {
+            DTBParser dtb;
+            auto tree = dtb.parseBuffer(reinterpret_cast<const uint8_t*>(r.stdoutData.data()),
+                                        r.stdoutData.size());
+            if (tree) {
+                lastWarnings_ = r.stderrData;
+                tree->setSourceFile(filename);
+                return tree;
+            }
+            lastError_ = "Could not read dtc output: " + dtb.lastError();
         }
-    } catch (const std::exception& e) {
-        std::cerr << "DTS parsing error: " << e.what() << std::endl;
     }
+
+    std::cerr << "DTS parsing error: " << lastError_ << std::endl;
     return nullptr;
 }
 
 bool DTSParser::canParse(const std::string& filename) const {
-    return filename.find(".dts") != std::string::npos;
-}
-
-bool DTSParser::parseDTSFile(const std::string& filename, std::shared_ptr<DeviceTree> tree) {
-    std::ifstream file(filename);
-    if (!file) {
-        throw std::runtime_error("Cannot open file: " + filename);
-    }
-    
-    std::string line;
-    auto rootNode = parseDTSNode(file, line);
-    if (rootNode) {
-        tree->setRoot(rootNode);
-        return true;
-    }
-    
-    return false;
-}
-
-std::shared_ptr<DeviceTreeNode> DTSParser::parseDTSNode(std::istream& stream, std::string& line) {
-    // Skip to node definition
-    while (std::getline(stream, line)) {
-        // Skip comments and empty lines
-        std::string trimmedLine = line;
-        trimmedLine.erase(0, trimmedLine.find_first_not_of(" \t"));
-        if (trimmedLine.empty() || (trimmedLine[0] == '/' && trimmedLine[1] == '/') || trimmedLine[0] == '*') {
-            continue;
-        }
-        
-        if (line.find("/dts-v1/;") != std::string::npos) {
-            continue; // Skip version header
-        }
-        
-        // Check if this line contains a node definition
-        if (line.find("{") != std::string::npos) {
-            // Extract node name
-            size_t bracePos = line.find("{");
-            std::string nodeName = line.substr(0, bracePos);
-            
-            // Trim whitespace
-            nodeName.erase(0, nodeName.find_first_not_of(" \t"));
-            nodeName.erase(nodeName.find_last_not_of(" \t") + 1);
-            
-            // Handle root node
-            if (nodeName.empty() || nodeName == "/") {
-                nodeName = "/";
-            }
-            
-            auto node = std::make_shared<DeviceTreeNode>(nodeName);
-            
-            // Parse node content using a stack-based approach
-            std::vector<std::shared_ptr<DeviceTreeNode>> nodeStack;
-            nodeStack.push_back(node);
-            
-            while (std::getline(stream, line)) {
-                std::string trimmedLine = line;
-                trimmedLine.erase(0, trimmedLine.find_first_not_of(" \t"));
-                
-                if (trimmedLine.find("};") != std::string::npos) {
-                    // End of current node, pop from stack
-                    if (nodeStack.size() > 1) {
-                        nodeStack.pop_back();
-                    } else {
-                        break; // End of root node
-                    }
-                    continue;
-                }
-                
-                // Skip empty lines and comments
-                if (trimmedLine.empty() || (trimmedLine[0] == '/' && trimmedLine[1] == '/') || trimmedLine[0] == '*') {
-                    continue;
-                }
-                
-                // Check if it's a property
-                if (line.find("=") != std::string::npos) {
-                    try {
-                        auto prop = parseDTSProperty(stream, line);
-                        nodeStack.back()->addProperty(prop);
-                    } catch (const std::exception& e) {
-                        std::cerr << "Warning: Failed to parse property: " << e.what() << std::endl;
-                        continue;
-                    }
-                }
-                // Check if it's a child node (node name followed by {)
-                else if (line.find("{") != std::string::npos) {
-                    try {
-                        // Extract child node name from current line
-                        size_t bracePos = line.find("{");
-                        std::string childNodeName = line.substr(0, bracePos);
-                        
-                        // Trim whitespace
-                        childNodeName.erase(0, childNodeName.find_first_not_of(" \t"));
-                        childNodeName.erase(childNodeName.find_last_not_of(" \t") + 1);
-                        
-                        auto childNode = std::make_shared<DeviceTreeNode>(childNodeName);
-                        
-                        // Add child to current node and push to stack
-                        nodeStack.back()->addChild(childNode);
-                        nodeStack.push_back(childNode);
-                        
-                    } catch (const std::exception& e) {
-                        std::cerr << "Warning: Failed to parse child node: " << e.what() << std::endl;
-                        continue;
-                    }
-                }
-            }
-            
-            return node;
-        }
-    }
-    
-    return nullptr;
-}
-
-DeviceTreeProperty DTSParser::parseDTSProperty(std::istream& stream, std::string& line) {
-    // Extract property name
-    size_t equalPos = line.find("=");
-    if (equalPos == std::string::npos) {
-        throw std::runtime_error("Invalid property syntax: missing '='");
-    }
-    
-    std::string propName = line.substr(0, equalPos);
-    
-    // Trim whitespace
-    propName.erase(0, propName.find_first_not_of(" \t"));
-    propName.erase(propName.find_last_not_of(" \t") + 1);
-    
-    if (propName.empty()) {
-        throw std::runtime_error("Empty property name");
-    }
-    
-    // Parse property value
-    std::string value = parseDTSValue(stream, line);
-    
-    // Determine value type and create property
-    PropertyValue propValue;
-    if (value.empty()) {
-        propValue = std::string("");
-    } else if (value[0] == '"' && value[value.length() - 1] == '"') {
-        // String value
-        propValue = value.substr(1, value.length() - 2);
-    } else if (value[0] == '<' && value[value.length() - 1] == '>') {
-        // Cell values
-        std::vector<uint32_t> cells;
-        std::string cellStr = value.substr(1, value.length() - 2);
-        std::istringstream cellStream(cellStr);
-        std::string cell;
-        
-        while (std::getline(cellStream, cell, ' ')) {
-            if (!cell.empty()) {
-                // Remove 0x prefix if present
-                if (cell.substr(0, 2) == "0x") {
-                    cell = cell.substr(2);
-                }
-                try {
-                    cells.push_back(std::stoul(cell, nullptr, 16));
-                } catch (const std::exception& e) {
-                    throw std::runtime_error("Invalid cell value: " + cell);
-                }
-            }
-        }
-        propValue = cells;
-    } else if (value[0] == '[' && value[value.length() - 1] == ']') {
-        // Binary values
-        std::vector<uint8_t> binary;
-        std::string binaryStr = value.substr(1, value.length() - 2);
-        std::istringstream binaryStream(binaryStr);
-        std::string byte;
-        
-        while (std::getline(binaryStream, byte, ' ')) {
-            if (!byte.empty()) {
-                // Remove 0x prefix if present
-                if (byte.substr(0, 2) == "0x") {
-                    byte = byte.substr(2);
-                }
-                try {
-                    binary.push_back(std::stoul(byte, nullptr, 16));
-                } catch (const std::exception& e) {
-                    throw std::runtime_error("Invalid binary value: " + byte);
-                }
-            }
-        }
-        propValue = binary;
-    } else {
-        // Treat as string
-        propValue = value;
-    }
-    
-    return DeviceTreeProperty(propName, propValue);
-}
-
-std::string DTSParser::parseDTSValue(std::istream& stream, std::string& line) {
-    size_t equalPos = line.find("=");
-    std::string value = line.substr(equalPos + 1);
-    
-    // Trim whitespace
-    value.erase(0, value.find_first_not_of(" \t"));
-    value.erase(value.find_last_not_of(" \t") + 1);
-    
-    // Remove semicolon if present
-    if (!value.empty() && value[value.length() - 1] == ';') {
-        value = value.substr(0, value.length() - 1);
-    }
-    
-    // Handle multi-line values
-    if (value.find("\\") != std::string::npos) {
-        std::string fullValue = value;
-        while (std::getline(stream, line)) {
-            if (line.find(";") != std::string::npos) {
-                fullValue += line.substr(0, line.find(";"));
-                break;
-            }
-            fullValue += line;
-        }
-        return fullValue;
-    }
-    
-    return value;
+    return hasSuffix(filename, ".dts") || hasSuffix(filename, ".dtsi") ||
+           hasSuffix(filename, ".dtso");
 }
 
 // DeviceTreeParserFactory implementation
