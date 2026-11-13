@@ -7,6 +7,7 @@ endif()
 add_executable(dte-tests
     DTBParserTest.cpp
     DTBIntegrationTest.cpp
+    ProcessTest.cpp
 )
 
 target_link_libraries(dte-tests PRIVATE dte-core GTest::gtest GTest::gtest_main)
