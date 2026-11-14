@@ -6,38 +6,38 @@
 #include <sstream>
 #include <cstdlib>
 #include <cstring>
-#include <sys/ioctl.h>
 #include <functional>
 #include <unistd.h>
 
 namespace DTE {
 
-// ANSI color codes for better output
+// ANSI color codes. Cleared by disableColors() when output is not a
+// terminal or NO_COLOR is set (https://no-color.org).
 namespace Colors {
-    const std::string RESET = "\033[0m";
-    const std::string RED = "\033[31m";
-    const std::string GREEN = "\033[32m";
-    const std::string YELLOW = "\033[33m";
-    const std::string BLUE = "\033[34m";
-    const std::string MAGENTA = "\033[35m";
-    const std::string CYAN = "\033[36m";
-    const std::string WHITE = "\033[37m";
-    const std::string BOLD = "\033[1m";
-    const std::string UNDERLINE = "\033[4m";
+    std::string RESET = "\033[0m";
+    std::string RED = "\033[31m";
+    std::string GREEN = "\033[32m";
+    std::string YELLOW = "\033[33m";
+    std::string BLUE = "\033[34m";
+    std::string MAGENTA = "\033[35m";
+    std::string CYAN = "\033[36m";
+    std::string WHITE = "\033[37m";
+    std::string BOLD = "\033[1m";
+    std::string UNDERLINE = "\033[4m";
+
+    void disableColors() {
+        for (auto* c : {&RESET, &RED, &GREEN, &YELLOW, &BLUE, &MAGENTA, &CYAN, &WHITE, &BOLD, &UNDERLINE}) {
+            c->clear();
+        }
+    }
 }
 
 // Utility functions
 namespace {
-    bool isTerminal() {
-        return isatty(STDOUT_FILENO);
-    }
-    
-    int getTerminalWidth() {
-        struct winsize w;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) {
-            return w.ws_col;
-        }
-        return 80; // Default width
+    bool shouldUseColor() {
+        const char* noColor = std::getenv("NO_COLOR");
+        if (noColor && *noColor) return false;
+        return isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     }
     
     std::string formatBytes(size_t bytes) {
@@ -77,6 +77,10 @@ CLIApp::CLIApp(int argc, char* argv[])
         args_.push_back(argv[i]);
     }
     
+    if (!shouldUseColor()) {
+        Colors::disableColors();
+    }
+
     setupCommands();
 }
 
@@ -620,36 +624,21 @@ void CLIApp::printTree(const std::shared_ptr<DeviceTreeNode>& node, const std::s
     }
 }
 
+// Status messages go to stderr so stdout carries only command output.
 void CLIApp::printError(const std::string& message) const {
-    if (isTerminal()) {
-        std::cerr << Colors::RED << Colors::BOLD << "ERROR: " << Colors::RESET << message << "\n";
-    } else {
-        std::cerr << "ERROR: " << message << "\n";
-    }
+    std::cerr << Colors::RED << Colors::BOLD << "ERROR: " << Colors::RESET << message << "\n";
 }
 
 void CLIApp::printWarning(const std::string& message) const {
-    if (isTerminal()) {
-        std::cout << Colors::YELLOW << Colors::BOLD << "WARNING: " << Colors::RESET << message << "\n";
-    } else {
-        std::cout << "WARNING: " << message << "\n";
-    }
+    std::cerr << Colors::YELLOW << Colors::BOLD << "WARNING: " << Colors::RESET << message << "\n";
 }
 
 void CLIApp::printSuccess(const std::string& message) const {
-    if (isTerminal()) {
-        std::cout << Colors::GREEN << Colors::BOLD << "SUCCESS: " << Colors::RESET << message << "\n";
-    } else {
-        std::cout << "SUCCESS: " << message << "\n";
-    }
+    std::cerr << Colors::GREEN << Colors::BOLD << "SUCCESS: " << Colors::RESET << message << "\n";
 }
 
 void CLIApp::printInfo(const std::string& message) const {
-    if (isTerminal()) {
-        std::cout << Colors::BLUE << Colors::BOLD << "INFO: " << Colors::RESET << message << "\n";
-    } else {
-        std::cout << "INFO: " << message << "\n";
-    }
+    std::cerr << Colors::BLUE << Colors::BOLD << "INFO: " << Colors::RESET << message << "\n";
 }
 
 } // namespace DTE 
