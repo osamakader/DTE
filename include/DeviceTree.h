@@ -8,14 +8,6 @@
 #include <variant>
 #include <cstdint>
 
-#ifdef HAVE_NLOHMANN_JSON
-#include <nlohmann/json.hpp>
-#endif
-
-#ifdef HAVE_YAML_CPP
-#include <yaml-cpp/yaml.h>
-#endif
-
 namespace DTE {
 
 // List of strings, e.g. compatible = "vendor,a", "vendor,b";
@@ -137,7 +129,7 @@ public:
     bool validate() const;
     std::vector<std::string> getValidationErrors() const;
     
-    // Export methods
+    // Export methods (built-in writers; see DeviceTree.cpp for the schema)
     std::string exportAsJSON() const;
     std::string exportAsYAML() const;
     
@@ -152,18 +144,6 @@ private:
     std::vector<MemoryReservation> memoryReservations_;
     uint32_t bootCpuId_ = 0;
     mutable std::vector<std::string> validationErrors_;
-    
-    // Export helper methods
-    void exportNodeAsJSON(std::shared_ptr<DeviceTreeNode> node, std::ostringstream& json, int indent) const;
-    void exportNodeAsYAML(std::shared_ptr<DeviceTreeNode> node, std::ostringstream& yaml, int indent) const;
-    
-#ifdef HAVE_NLOHMANN_JSON
-    nlohmann::json exportNodeToJSON(std::shared_ptr<DeviceTreeNode> node) const;
-#endif
-
-#ifdef HAVE_YAML_CPP
-    YAML::Node exportNodeToYAML(std::shared_ptr<DeviceTreeNode> node) const;
-#endif
 };
 
 } // namespace DTE

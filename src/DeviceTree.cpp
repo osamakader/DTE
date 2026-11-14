@@ -1,18 +1,12 @@
 #include "DeviceTree.h"
 #include "DeviceTreeParser.h"
+#include "Escape.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
 #include <fstream>
 
-#ifdef HAVE_NLOHMANN_JSON
-#include <nlohmann/json.hpp>
-#endif
-
-#ifdef HAVE_YAML_CPP
-#include <yaml-cpp/yaml.h>
-#endif
 
 namespace DTE {
 
@@ -318,52 +312,140 @@ std::vector<std::string> DeviceTree::getValidationErrors() const {
     return validationErrors_;
 }
 
+// JSON / YAML export
+//
+// Both formats share one schema:
+//   device-tree:
+//     source-file, boot-cpuid, memory-reservations: [{address, size}],
+//     root-node: {name, path, properties: {name: value}, children: [...]}
+// Property values map to: string -> string, string list -> array of
+// strings, cells / bytes -> array of numbers, empty property -> "".
+// Node and property order is preserved.
+namespace {
+
+using detail::jsonQuote;
+
+template <typename T>
+void writeNumberList(std::ostream& os, const std::vector<T>& v) {
+    os << "[";
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (i > 0) os << ", ";
+        os << static_cast<uint64_t>(v[i]);
+    }
+    os << "]";
+}
+
+// Writes a property value as an inline JSON value. The same text is a
+// valid YAML flow value, so both writers use it.
+void writeInlineValue(std::ostream& os, const DeviceTreeProperty& prop) {
+    const auto& v = prop.getValue();
+    if (auto* str = std::get_if<std::string>(&v)) {
+        os << jsonQuote(*str);
+    } else if (auto* list = std::get_if<StringList>(&v)) {
+        os << "[";
+        for (size_t i = 0; i < list->size(); ++i) {
+            if (i > 0) os << ", ";
+            os << jsonQuote((*list)[i]);
+        }
+        os << "]";
+    } else if (auto* bytes = std::get_if<std::vector<uint8_t>>(&v)) {
+        writeNumberList(os, *bytes);
+    } else if (auto* cells = std::get_if<std::vector<uint32_t>>(&v)) {
+        writeNumberList(os, *cells);
+    } else if (auto* cells64 = std::get_if<std::vector<uint64_t>>(&v)) {
+        writeNumberList(os, *cells64);
+    }
+}
+
+void writeJsonNode(std::ostream& os, const DeviceTreeNode& node, int depth) {
+    const std::string in(depth * 2, ' ');
+    os << "{\n";
+    os << in << "  \"name\": " << jsonQuote(node.getName()) << ",\n";
+    os << in << "  \"path\": " << jsonQuote(node.getFullPath()) << ",\n";
+
+    const auto& props = node.getProperties();
+    os << in << "  \"properties\": {";
+    for (size_t i = 0; i < props.size(); ++i) {
+        os << (i == 0 ? "\n" : ",\n") << in << "    " << jsonQuote(props[i].getName()) << ": ";
+        writeInlineValue(os, props[i]);
+    }
+    os << (props.empty() ? "},\n" : "\n" + in + "  },\n");
+
+    const auto& children = node.getChildren();
+    os << in << "  \"children\": [";
+    for (size_t i = 0; i < children.size(); ++i) {
+        os << (i == 0 ? "\n" : ",\n") << in << "    ";
+        writeJsonNode(os, *children[i], depth + 2);
+    }
+    os << (children.empty() ? "]\n" : "\n" + in + "  ]\n");
+    os << in << "}";
+}
+
+// `lead` is written before the first key: indentation, or "- " for a
+// sequence item; following keys are indented to line up with it.
+void writeYamlNode(std::ostream& os, const DeviceTreeNode& node, const std::string& lead,
+                   const std::string& in) {
+    os << lead << "name: " << jsonQuote(node.getName()) << "\n";
+    os << in << "path: " << jsonQuote(node.getFullPath()) << "\n";
+
+    const auto& props = node.getProperties();
+    os << in << "properties:" << (props.empty() ? " {}\n" : "\n");
+    for (const auto& prop : props) {
+        // Keys are quoted: names like #address-cells would start a comment.
+        os << in << "  " << jsonQuote(prop.getName()) << ": ";
+        writeInlineValue(os, prop);
+        os << "\n";
+    }
+
+    const auto& children = node.getChildren();
+    os << in << "children:" << (children.empty() ? " []\n" : "\n");
+    for (const auto& child : children) {
+        writeYamlNode(os, *child, in + "  - ", in + "    ");
+    }
+}
+
+} // namespace
+
 std::string DeviceTree::exportAsJSON() const {
-    if (!root_) return "{}";
-    
-#ifdef HAVE_NLOHMANN_JSON
-    // Use nlohmann/json library
-    nlohmann::json json;
-    json["device-tree"]["source-file"] = sourceFile_;
-    json["device-tree"]["root-node"] = exportNodeToJSON(root_);
-    return json.dump(2); // Pretty print with 2-space indent
-#else
-    // Fallback to custom implementation
-    std::ostringstream json;
-    json << "{\n";
-    json << "  \"device-tree\": {\n";
-    json << "    \"source-file\": \"" << sourceFile_ << "\",\n";
-    json << "    \"root-node\": ";
-    exportNodeAsJSON(root_, json, 2);
-    json << "\n  }\n";
-    json << "}";
-    
-    return json.str();
-#endif
+    std::ostringstream os;
+    os << "{\n";
+    os << "  \"device-tree\": {\n";
+    os << "    \"source-file\": " << jsonQuote(sourceFile_) << ",\n";
+    os << "    \"boot-cpuid\": " << bootCpuId_ << ",\n";
+    os << "    \"memory-reservations\": [";
+    for (size_t i = 0; i < memoryReservations_.size(); ++i) {
+        const auto& r = memoryReservations_[i];
+        os << (i == 0 ? "\n" : ",\n") << "      {\"address\": " << r.address
+           << ", \"size\": " << r.size << "}";
+    }
+    os << (memoryReservations_.empty() ? "],\n" : "\n    ],\n");
+    os << "    \"root-node\": ";
+    if (root_) {
+        writeJsonNode(os, *root_, 2);
+    } else {
+        os << "null";
+    }
+    os << "\n  }\n";
+    os << "}\n";
+    return os.str();
 }
 
 std::string DeviceTree::exportAsYAML() const {
-    if (!root_) return "";
-    
-#ifdef HAVE_YAML_CPP
-    // Use yaml-cpp library
-    YAML::Node yaml;
-    yaml["device-tree"]["source-file"] = sourceFile_;
-    yaml["device-tree"]["root-node"] = exportNodeToYAML(root_);
-    
-    std::ostringstream output;
-    output << yaml;
-    return output.str();
-#else
-    // Fallback to custom implementation
-    std::ostringstream yaml;
-    yaml << "device-tree:\n";
-    yaml << "  source-file: " << sourceFile_ << "\n";
-    yaml << "  root-node:\n";
-    exportNodeAsYAML(root_, yaml, 2);
-    
-    return yaml.str();
-#endif
+    std::ostringstream os;
+    os << "device-tree:\n";
+    os << "  source-file: " << jsonQuote(sourceFile_) << "\n";
+    os << "  boot-cpuid: " << bootCpuId_ << "\n";
+    os << "  memory-reservations:" << (memoryReservations_.empty() ? " []\n" : "\n");
+    for (const auto& r : memoryReservations_) {
+        os << "    - {address: " << r.address << ", size: " << r.size << "}\n";
+    }
+    if (root_) {
+        os << "  root-node:\n";
+        writeYamlNode(os, *root_, "    ", "    ");
+    } else {
+        os << "  root-node: null\n";
+    }
+    return os.str();
 }
 
 std::shared_ptr<DeviceTreeNode> DeviceTree::findNodeByPath(const std::string& path) const {
@@ -379,192 +461,6 @@ std::vector<std::shared_ptr<DeviceTreeNode>> DeviceTree::findNodesByName(const s
 std::vector<std::shared_ptr<DeviceTreeNode>> DeviceTree::findNodesByPattern(const std::string& pattern) const {
     if (!root_) return {};
     return root_->findNodesByPattern(pattern);
-}
-
-#ifdef HAVE_NLOHMANN_JSON
-nlohmann::json DeviceTree::exportNodeToJSON(std::shared_ptr<DeviceTreeNode> node) const {
-    nlohmann::json json;
-    json["name"] = node->getName();
-    
-    // Export properties
-    nlohmann::json props;
-    for (const auto& prop : node->getProperties()) {
-        if (prop.isCells()) {
-            auto cells = prop.getValueAsCells();
-            nlohmann::json cellArray = nlohmann::json::array();
-            for (auto cell : cells) {
-                cellArray.push_back(cell);
-            }
-            props[prop.getName()] = cellArray;
-        } else if (prop.isBinary()) {
-            auto binary = prop.getValueAsBinary();
-            nlohmann::json binaryArray = nlohmann::json::array();
-            for (auto byte : binary) {
-                binaryArray.push_back(static_cast<int>(byte));
-            }
-            props[prop.getName()] = binaryArray;
-        } else {
-            props[prop.getName()] = prop.getValueAsString();
-        }
-    }
-    json["properties"] = props;
-    
-    // Export children
-    const auto& children = node->getChildren();
-    if (!children.empty()) {
-        nlohmann::json childrenArray = nlohmann::json::array();
-        for (const auto& child : children) {
-            childrenArray.push_back(exportNodeToJSON(child));
-        }
-        json["children"] = childrenArray;
-    }
-    
-    return json;
-}
-#endif
-
-#ifdef HAVE_YAML_CPP
-YAML::Node DeviceTree::exportNodeToYAML(std::shared_ptr<DeviceTreeNode> node) const {
-    YAML::Node yaml;
-    yaml["name"] = node->getName();
-    
-    // Export properties
-    YAML::Node props;
-    for (const auto& prop : node->getProperties()) {
-        if (prop.isCells()) {
-            auto cells = prop.getValueAsCells();
-            YAML::Node cellArray;
-            for (auto cell : cells) {
-                cellArray.push_back(cell);
-            }
-            props[prop.getName()] = cellArray;
-        } else if (prop.isBinary()) {
-            auto binary = prop.getValueAsBinary();
-            YAML::Node binaryArray;
-            for (auto byte : binary) {
-                binaryArray.push_back(static_cast<int>(byte));
-            }
-            props[prop.getName()] = binaryArray;
-        } else {
-            props[prop.getName()] = prop.getValueAsString();
-        }
-    }
-    yaml["properties"] = props;
-    
-    // Export children
-    const auto& children = node->getChildren();
-    if (!children.empty()) {
-        YAML::Node childrenArray;
-        for (const auto& child : children) {
-            childrenArray.push_back(exportNodeToYAML(child));
-        }
-        yaml["children"] = childrenArray;
-    }
-    
-    return yaml;
-}
-#endif
-
-void DeviceTree::exportNodeAsJSON(std::shared_ptr<DeviceTreeNode> node, std::ostringstream& json, int indent) const {
-    std::string indentStr(indent * 2, ' ');
-    
-    json << "{\n";
-    json << indentStr << "  \"name\": \"" << node->getName() << "\",\n";
-    
-    // Export properties
-    json << indentStr << "  \"properties\": {\n";
-    const auto& properties = node->getProperties();
-    for (size_t i = 0; i < properties.size(); ++i) {
-        json << indentStr << "    \"" << properties[i].getName() << "\": ";
-        
-        if (properties[i].isString()) {
-            json << "\"" << properties[i].getValueAsString() << "\"";
-        } else if (properties[i].isCells()) {
-            auto cells = properties[i].getValueAsCells();
-            json << "[";
-            for (size_t j = 0; j < cells.size(); ++j) {
-                if (j > 0) json << ", ";
-                json << "0x" << std::hex << cells[j];
-            }
-            json << "]";
-        } else if (properties[i].isBinary()) {
-            auto binary = properties[i].getValueAsBinary();
-            json << "[";
-            for (size_t j = 0; j < binary.size(); ++j) {
-                if (j > 0) json << ", ";
-                json << "0x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(binary[j]);
-            }
-            json << "]";
-        } else {
-            json << "\"" << properties[i].getValueAsString() << "\"";
-        }
-        
-        if (i < properties.size() - 1) json << ",";
-        json << "\n";
-    }
-    json << indentStr << "  }";
-    
-    // Export children
-    const auto& children = node->getChildren();
-    if (!children.empty()) {
-        json << ",\n" << indentStr << "  \"children\": [\n";
-        for (size_t i = 0; i < children.size(); ++i) {
-            exportNodeAsJSON(children[i], json, indent + 1);
-            if (i < children.size() - 1) json << ",";
-            json << "\n";
-        }
-        json << indentStr << "  ]";
-    }
-    
-    json << "\n" << indentStr << "}";
-}
-
-void DeviceTree::exportNodeAsYAML(std::shared_ptr<DeviceTreeNode> node, std::ostringstream& yaml, int indent) const {
-    std::string indentStr(indent * 2, ' ');
-    
-    yaml << indentStr << "name: " << node->getName() << "\n";
-    
-    // Export properties
-    const auto& properties = node->getProperties();
-    if (!properties.empty()) {
-        yaml << indentStr << "properties:\n";
-        for (const auto& prop : properties) {
-            yaml << indentStr << "  " << prop.getName() << ": ";
-            
-            if (prop.isString()) {
-                yaml << "\"" << prop.getValueAsString() << "\"";
-            } else if (prop.isCells()) {
-                auto cells = prop.getValueAsCells();
-                yaml << "[";
-                for (size_t j = 0; j < cells.size(); ++j) {
-                    if (j > 0) yaml << ", ";
-                    yaml << "0x" << std::hex << cells[j];
-                }
-                yaml << "]";
-            } else if (prop.isBinary()) {
-                auto binary = prop.getValueAsBinary();
-                yaml << "[";
-                for (size_t j = 0; j < binary.size(); ++j) {
-                    if (j > 0) yaml << ", ";
-                    yaml << "0x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(binary[j]);
-                }
-                yaml << "]";
-            } else {
-                yaml << "\"" << prop.getValueAsString() << "\"";
-            }
-            yaml << "\n";
-        }
-    }
-    
-    // Export children
-    const auto& children = node->getChildren();
-    if (!children.empty()) {
-        yaml << indentStr << "children:\n";
-        for (const auto& child : children) {
-            yaml << indentStr << "  -\n";
-            exportNodeAsYAML(child, yaml, indent + 2);
-        }
-    }
 }
 
 } // namespace DTE 

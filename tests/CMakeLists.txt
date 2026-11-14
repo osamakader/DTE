@@ -9,11 +9,26 @@ add_executable(dte-tests
     DTBIntegrationTest.cpp
     DTSParserTest.cpp
     DiffTest.cpp
+    ExportTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )
 
 target_link_libraries(dte-tests PRIVATE dte-core GTest::gtest GTest::gtest_main)
+
+# Optional: parse exported JSON/YAML with real libraries
+if(nlohmann_json_FOUND)
+    target_link_libraries(dte-tests PRIVATE nlohmann_json::nlohmann_json)
+    target_compile_definitions(dte-tests PRIVATE HAVE_NLOHMANN_JSON)
+endif()
+if(yaml-cpp_FOUND)
+    if(TARGET yaml-cpp::yaml-cpp)
+        target_link_libraries(dte-tests PRIVATE yaml-cpp::yaml-cpp)
+    else()
+        target_link_libraries(dte-tests PRIVATE yaml-cpp)
+    endif()
+    target_compile_definitions(dte-tests PRIVATE HAVE_YAML_CPP)
+endif()
 
 target_compile_definitions(dte-tests PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"

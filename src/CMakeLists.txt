@@ -10,15 +10,6 @@ target_include_directories(dte-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 
-# Link JSON and YAML libraries if available
-if(nlohmann_json_FOUND)
-    target_link_libraries(dte-core PUBLIC nlohmann_json::nlohmann_json)
-endif()
-
-if(yaml-cpp_FOUND)
-    target_link_libraries(dte-core PUBLIC yaml-cpp)
-endif()
-
 # Source files for Device Tree Explorer GUI
 set(GUI_SOURCES
     main.cpp
