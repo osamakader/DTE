@@ -54,8 +54,14 @@ private:
     void printSuccess(const std::string& message) const;
     void printInfo(const std::string& message) const;
 
+    // Parses and removes global options (-I/--include, --no-color) from
+    // args_. Returns false on a malformed option.
+    bool parseGlobalOptions();
+    LoadOptions loadOptions() const { return LoadOptions{includePaths_}; }
+
     // Member variables
     std::string programName_;
+    std::vector<std::string> includePaths_;
     std::vector<std::string> args_;
     std::map<std::string, CLICommand> commands_;
     std::shared_ptr<DeviceTree> deviceTree_;

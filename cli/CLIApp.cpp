@@ -84,7 +84,39 @@ CLIApp::CLIApp(int argc, char* argv[])
     setupCommands();
 }
 
+bool CLIApp::parseGlobalOptions() {
+    std::vector<std::string> rest;
+    for (size_t i = 0; i < args_.size(); ++i) {
+        const std::string& a = args_[i];
+        if (a == "--") {
+            rest.insert(rest.end(), args_.begin() + i + 1, args_.end());
+            break;
+        }
+        if (a == "-I" || a == "--include") {
+            if (i + 1 >= args_.size()) {
+                printError("Option " + a + " requires a directory argument");
+                return false;
+            }
+            includePaths_.push_back(args_[++i]);
+        } else if (a.rfind("--include=", 0) == 0) {
+            includePaths_.push_back(a.substr(10));
+        } else if (a.size() > 2 && a.rfind("-I", 0) == 0) {
+            includePaths_.push_back(a.substr(2));
+        } else if (a == "--no-color") {
+            Colors::disableColors();
+        } else {
+            rest.push_back(a);
+        }
+    }
+    args_ = std::move(rest);
+    return true;
+}
+
 int CLIApp::run() {
+    if (!parseGlobalOptions()) {
+        return EXIT_FAILURE;
+    }
+
     if (args_.empty()) {
         printUsage();
         return EXIT_FAILURE;
@@ -182,7 +214,7 @@ void CLIApp::setupCommands() {
 
 void CLIApp::printUsage() const {
     std::cout << Colors::BOLD << "Device Tree Explorer CLI" << Colors::RESET << "\n\n";
-    std::cout << "Usage: " << programName_ << " <command> [options]\n\n";
+    std::cout << "Usage: " << programName_ << " [global options] <command> [arguments]\n\n";
     std::cout << Colors::BOLD << "Available commands:" << Colors::RESET << "\n";
     
     int maxWidth = 0;
@@ -195,6 +227,9 @@ void CLIApp::printUsage() const {
                   << " " << cmd.second.description << "\n";
     }
     
+    std::cout << "\n" << Colors::BOLD << "Global options:" << Colors::RESET << "\n";
+    std::cout << "  -I, --include DIR  Add an include directory for DTS sources (repeatable)\n";
+    std::cout << "  --no-color         Disable colored output (also: NO_COLOR=1)\n";
     std::cout << "\nUse '" << programName_ << " help <command>' for detailed help.\n";
     std::cout << "Use '" << programName_ << " --version' to show version information.\n";
 }
@@ -226,7 +261,7 @@ void CLIApp::printHelp(const std::string& command) const {
     if (command == "info") {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " info device.dtb\n";
-        std::cout << "  " << programName_ << " info /proc/device-tree\n";
+        std::cout << "  " << programName_ << " -I include info board.dts\n";
     } else if (command == "diff") {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " diff base.dtb overlay.dtb\n";
@@ -237,8 +272,13 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "\n" << Colors::BOLD << "Supported formats:" << Colors::RESET << "\n";
         std::cout << "  json    - JSON format\n";
         std::cout << "  yaml    - YAML format\n";
-        std::cout << "  dts     - Device Tree Source format\n";
-        std::cout << "  dtb     - Device Tree Blob format\n";
+        std::cout << "\nUse '" << programName_ << " convert' to produce DTS or DTB files.\n";
+    } else if (command == "convert") {
+        std::cout << "\nThe input format is detected from the file contents; the output\n";
+        std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
+        std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
+        std::cout << "  " << programName_ << " convert board.dtb board.dts\n";
+        std::cout << "  " << programName_ << " -I include convert board.dts board.dtb\n";
     }
 }
 
@@ -315,14 +355,14 @@ int CLIApp::handleDiff(const std::vector<std::string>& args) {
     
     printInfo("Loading base device tree: " + baseFile);
     auto baseTree = std::make_shared<DeviceTree>();
-    if (!baseTree->loadFromFile(baseFile)) {
+    if (!baseTree->loadFromFile(baseFile, loadOptions())) {
         printError("Failed to load base file: " + baseFile + "\n" + baseTree->getLoadError());
         return DIFF_EXIT_ERROR;
     }
     
     printInfo("Loading overlay device tree: " + overlayFile);
     auto overlayTree = std::make_shared<DeviceTree>();
-    if (!overlayTree->loadFromFile(overlayFile)) {
+    if (!overlayTree->loadFromFile(overlayFile, loadOptions())) {
         printError("Failed to load overlay file: " + overlayFile + "\n" + overlayTree->getLoadError());
         return DIFF_EXIT_ERROR;
     }
@@ -393,30 +433,32 @@ int CLIApp::handleConvert(const std::vector<std::string>& args) {
         return EXIT_FAILURE;
     }
     
-    // Determine conversion direction based on file extensions
-    std::string inputExt = getFileExtension(inputFile);
-    std::string outputExt = getFileExtension(outputFile);
-    
-    printInfo("Converting " + inputExt + " to " + outputExt + ": " + inputFile + " -> " + outputFile);
-    
+    auto parser = DeviceTreeParserFactory::createParser(inputFile);
+    const bool inputIsDtb = dynamic_cast<DTBParser*>(parser.get()) != nullptr;
+    const bool inputIsDts = dynamic_cast<DTSParser*>(parser.get()) != nullptr;
+    const std::string outputExt = getFileExtension(outputFile);
+    const bool outputIsDtb = outputExt == "dtb" || outputExt == "dtbo";
+    const bool outputIsDts = outputExt == "dts" || outputExt == "dtsi" || outputExt == "dtso";
+
+    std::string error;
     bool success = false;
-    if (inputExt == "dtb" && outputExt == "dts") {
-        success = DeviceTreeUtils::dtbToDts(inputFile, outputFile);
-    } else if (inputExt == "dts" && outputExt == "dtb") {
-        success = DeviceTreeUtils::dtsToDtb(inputFile, outputFile);
+    if (inputIsDtb && outputIsDts) {
+        printInfo("Decompiling DTB to DTS: " + inputFile + " -> " + outputFile);
+        success = DeviceTreeUtils::dtbToDts(inputFile, outputFile, &error);
+    } else if (inputIsDts && outputIsDtb) {
+        printInfo("Compiling DTS to DTB: " + inputFile + " -> " + outputFile);
+        success = DeviceTreeUtils::dtsToDtb(inputFile, outputFile, includePaths_, &error);
     } else {
-        printError("Unsupported conversion: " + inputExt + " to " + outputExt);
-        printInfo("Supported conversions: dtb <-> dts");
+        printError("Unsupported conversion: " + inputFile + " -> " + outputFile);
+        printInfo("Supported conversions: DTB -> .dts/.dtsi/.dtso, DTS -> .dtb/.dtbo");
         return EXIT_FAILURE;
     }
     
-    if (success) {
-        printSuccess("Successfully converted: " + inputFile + " -> " + outputFile);
-    } else {
-        printError("Conversion failed");
+    if (!success) {
+        printError("Conversion failed\n" + error);
         return EXIT_FAILURE;
     }
-    
+    printSuccess("Successfully converted: " + inputFile + " -> " + outputFile);
     return EXIT_SUCCESS;
 }
 
@@ -496,7 +538,7 @@ int CLIApp::handleHelp(const std::vector<std::string>& args) {
 
 bool CLIApp::loadDeviceTree(const std::string& filename) {
     deviceTree_ = std::make_shared<DeviceTree>();
-    if (!deviceTree_->loadFromFile(filename)) {
+    if (!deviceTree_->loadFromFile(filename, loadOptions())) {
         printError("Failed to load device tree file: " + filename + "\n" + deviceTree_->getLoadError());
         return false;
     }

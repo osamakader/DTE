@@ -10,6 +10,7 @@ add_executable(dte-tests
     DTSParserTest.cpp
     DiffTest.cpp
     ExportTest.cpp
+    CLITest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )
@@ -32,7 +33,9 @@ endif()
 
 target_compile_definitions(dte-tests PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    DTE_CLI_PATH="$<TARGET_FILE:dte-cli>"
 )
+add_dependencies(dte-tests dte-cli)
 if(DTC_EXECUTABLE)
     target_compile_definitions(dte-tests PRIVATE DTC_PATH="${DTC_EXECUTABLE}")
 endif()
