@@ -18,12 +18,16 @@
 
 namespace DTE {
 
+// List of strings, e.g. compatible = "vendor,a", "vendor,b";
+using StringList = std::vector<std::string>;
+
 // Property value types
 using PropertyValue = std::variant<
-    std::string,           // String properties
+    std::string,           // Single string (also used for empty properties)
     std::vector<uint8_t>,  // Binary properties
     std::vector<uint32_t>, // Cell properties (32-bit)
-    std::vector<uint64_t>  // Cell properties (64-bit)
+    std::vector<uint64_t>, // Cell properties (64-bit)
+    StringList             // Two or more strings
 >;
 
 // Device tree property
@@ -37,20 +41,31 @@ public:
     
     // Type checking methods
     bool isString() const;
+    bool isStringList() const;
     bool isBinary() const;
     bool isCells() const;
     bool isCells64() const;
     
     // Value conversion methods
+    // getValueAsString() renders the value in DTS syntax: "escaped",
+    // "a", "b", <0x1 0x2> or [00 11].
     std::string getValueAsString() const;
+    // The string(s) of a string or string-list property, unescaped;
+    // empty for other types.
+    StringList getValueAsStrings() const;
     std::vector<uint8_t> getValueAsBinary() const;
     std::vector<uint32_t> getValueAsCells() const;
     std::vector<uint64_t> getValueAsCells64() const;
+
+    bool operator==(const DeviceTreeProperty& other) const = default;
 
 private:
     std::string name_;
     PropertyValue value_;
 };
+
+// Quotes and escapes a string for DTS output (\\, \", \n, \t, \xNN).
+std::string quoteDtsString(const std::string& s);
 
 // Device tree node
 class DeviceTreeNode : public std::enable_shared_from_this<DeviceTreeNode> {

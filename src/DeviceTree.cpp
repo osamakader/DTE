@@ -20,8 +20,36 @@ namespace DTE {
 DeviceTreeProperty::DeviceTreeProperty(const std::string& name, const PropertyValue& value)
     : name_(name), value_(value) {}
 
+std::string quoteDtsString(const std::string& s) {
+    std::string out = "\"";
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\t': out += "\\t"; break;
+        case '\r': out += "\\r"; break;
+        default:
+            if (c < 0x20 || c >= 0x7f) {
+                static const char* hex = "0123456789abcdef";
+                out += "\\x";
+                out += hex[c >> 4];
+                out += hex[c & 0xf];
+            } else {
+                out += static_cast<char>(c);
+            }
+        }
+    }
+    out += "\"";
+    return out;
+}
+
 bool DeviceTreeProperty::isString() const {
     return std::holds_alternative<std::string>(value_);
+}
+
+bool DeviceTreeProperty::isStringList() const {
+    return std::holds_alternative<StringList>(value_);
 }
 
 bool DeviceTreeProperty::isBinary() const {
@@ -40,35 +68,46 @@ std::string DeviceTreeProperty::getValueAsString() const {
     std::ostringstream oss;
     
     if (isString()) {
-        oss << "\"" << std::get<std::string>(value_) << "\"";
+        oss << quoteDtsString(std::get<std::string>(value_));
+    } else if (isStringList()) {
+        const auto& list = std::get<StringList>(value_);
+        for (size_t i = 0; i < list.size(); ++i) {
+            if (i > 0) oss << ", ";
+            oss << quoteDtsString(list[i]);
+        }
     } else if (isBinary()) {
-        auto binary = std::get<std::vector<uint8_t>>(value_);
-        oss << "[";
+        const auto& binary = std::get<std::vector<uint8_t>>(value_);
+        oss << "[" << std::hex << std::setfill('0');
         for (size_t i = 0; i < binary.size(); ++i) {
             if (i > 0) oss << " ";
-            oss << "0x" << std::hex << std::setw(2) << std::setfill('0') 
-                << static_cast<int>(binary[i]);
+            oss << std::setw(2) << static_cast<int>(binary[i]);
         }
         oss << "]";
     } else if (isCells()) {
-        auto cells = std::get<std::vector<uint32_t>>(value_);
-        oss << "<";
+        const auto& cells = std::get<std::vector<uint32_t>>(value_);
+        oss << "<" << std::hex;
         for (size_t i = 0; i < cells.size(); ++i) {
             if (i > 0) oss << " ";
-            oss << "0x" << std::hex << cells[i];
+            oss << "0x" << cells[i];
         }
         oss << ">";
     } else if (isCells64()) {
-        auto cells = std::get<std::vector<uint64_t>>(value_);
-        oss << "<";
+        const auto& cells = std::get<std::vector<uint64_t>>(value_);
+        oss << "/bits/ 64 <" << std::hex;
         for (size_t i = 0; i < cells.size(); ++i) {
             if (i > 0) oss << " ";
-            oss << "0x" << std::hex << cells[i];
+            oss << "0x" << cells[i];
         }
         oss << ">";
     }
     
     return oss.str();
+}
+
+StringList DeviceTreeProperty::getValueAsStrings() const {
+    if (isString()) return {std::get<std::string>(value_)};
+    if (isStringList()) return std::get<StringList>(value_);
+    return {};
 }
 
 std::vector<uint8_t> DeviceTreeProperty::getValueAsBinary() const {

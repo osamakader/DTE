@@ -59,6 +59,8 @@ void PropertyTableWidget::populateTable() {
         QString typeStr;
         if (prop.isString()) {
             typeStr = "String";
+        } else if (prop.isStringList()) {
+            typeStr = "String list";
         } else if (prop.isBinary()) {
             typeStr = "Binary";
         } else if (prop.isCells()) {

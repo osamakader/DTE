@@ -94,8 +94,8 @@ bool isPrintable(uint8_t c) { return c >= 0x20 && c <= 0x7e; }
 
 // Infer the most natural representation of a raw property value, using the
 // same heuristic as dtc's decompiler:
-//   - one or more non-empty printable NUL-terminated strings -> string
-//     (a string list is joined as `a", "b` so it renders like DTS source)
+//   - one non-empty printable NUL-terminated string -> string
+//   - several such strings back to back -> string list
 //   - length multiple of 4 -> big-endian 32-bit cells
 //   - otherwise -> bytes
 PropertyValue inferPropertyValue(const uint8_t* data, size_t len) {
@@ -120,12 +120,8 @@ PropertyValue inferPropertyValue(const uint8_t* data, size_t len) {
             }
         }
         if (ok) {
-            std::string joined;
-            for (size_t i = 0; i < parts.size(); ++i) {
-                if (i > 0) joined += "\", \"";
-                joined += parts[i];
-            }
-            return joined;
+            if (parts.size() == 1) return parts.front();
+            return StringList(std::move(parts));
         }
     }
 

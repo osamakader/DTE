@@ -9,6 +9,7 @@ add_executable(dte-tests
     DTBIntegrationTest.cpp
     DTSParserTest.cpp
     ProcessTest.cpp
+    PropertyTest.cpp
 )
 
 target_link_libraries(dte-tests PRIVATE dte-core GTest::gtest GTest::gtest_main)

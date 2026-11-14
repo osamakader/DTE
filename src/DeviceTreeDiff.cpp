@@ -355,16 +355,7 @@ std::string DeviceTreeDiff::propertyValueToString(const DeviceTreeProperty& prop
 }
 
 bool DeviceTreeDiff::propertiesEqual(const DeviceTreeProperty& prop1, const DeviceTreeProperty& prop2) const {
-    if (prop1.isString() && prop2.isString()) {
-        return prop1.getValueAsString() == prop2.getValueAsString();
-    } else if (prop1.isBinary() && prop2.isBinary()) {
-        return prop1.getValueAsBinary() == prop2.getValueAsBinary();
-    } else if (prop1.isCells() && prop2.isCells()) {
-        return prop1.getValueAsCells() == prop2.getValueAsCells();
-    } else if (prop1.isCells64() && prop2.isCells64()) {
-        return prop1.getValueAsCells64() == prop2.getValueAsCells64();
-    }
-    return false;
+    return prop1.getValue() == prop2.getValue();
 }
 
 // DiffVisualizer implementation
