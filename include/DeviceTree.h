@@ -112,7 +112,10 @@ public:
     void setRoot(std::shared_ptr<DeviceTreeNode> root) { root_ = root; }
     
     // File operations
+    // Loads a DTB or DTS file. On failure returns false, leaves the tree
+    // unchanged and sets getLoadError().
     bool loadFromFile(const std::string& filename);
+    const std::string& getLoadError() const { return loadError_; }
     bool saveToFile(const std::string& filename, bool asDTS = false) const;
     
     // Source file information
@@ -141,6 +144,7 @@ public:
 private:
     std::shared_ptr<DeviceTreeNode> root_;
     std::string sourceFile_;
+    std::string loadError_;
     std::vector<MemoryReservation> memoryReservations_;
     uint32_t bootCpuId_ = 0;
     mutable std::vector<std::string> validationErrors_;

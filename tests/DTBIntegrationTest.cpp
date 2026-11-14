@@ -164,3 +164,27 @@ TEST(DTBFile, DtsFileIsNotClaimedByDtbParser) {
     DTBParser parser;
     EXPECT_FALSE(parser.canParse(std::string(TEST_DATA_DIR) + "/board.dts"));
 }
+
+TEST(DeviceTreeLoad, ReportsMissingFile) {
+    DeviceTree tree;
+    EXPECT_FALSE(tree.loadFromFile("/nonexistent/x.dtb"));
+    EXPECT_NE(tree.getLoadError().find("Cannot open file"), std::string::npos) << tree.getLoadError();
+}
+
+TEST(DeviceTreeLoad, ReportsUnrecognizedFormat) {
+    TempDir tmp;
+    auto file = tmp.write("notes.txt", "hello");
+    DeviceTree tree;
+    EXPECT_FALSE(tree.loadFromFile(file));
+    EXPECT_NE(tree.getLoadError().find("Unrecognized file format"), std::string::npos) << tree.getLoadError();
+}
+
+TEST(DeviceTreeLoad, ReportsParserErrorAndKeepsPreviousTree) {
+    TempDir tmp;
+    auto file = tmp.write("bad.dtb", std::string(64, '\0'));
+    DeviceTree tree;
+    auto before = tree.getRoot();
+    EXPECT_FALSE(tree.loadFromFile(file));
+    EXPECT_NE(tree.getLoadError().find("magic"), std::string::npos) << tree.getLoadError();
+    EXPECT_EQ(tree.getRoot(), before);
+}

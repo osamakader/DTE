@@ -268,20 +268,24 @@ DeviceTree::DeviceTree()
     : root_(std::make_shared<DeviceTreeNode>("/")) {}
 
 bool DeviceTree::loadFromFile(const std::string& filename) {
-    // Use parser factory to load the file
     auto parser = DeviceTreeParserFactory::createParser(filename);
     if (!parser) {
+        loadError_ = std::ifstream(filename)
+            ? "Unrecognized file format (expected a DTB or a .dts/.dtsi/.dtso file): " + filename
+            : "Cannot open file: " + filename;
         return false;
     }
     
     auto parsedTree = parser->parse(filename);
     if (!parsedTree) {
+        loadError_ = parser->lastError();
         return false;
     }
     
     // Take over the parsed tree, including header metadata
     *this = *parsedTree;
     sourceFile_ = filename;
+    loadError_.clear();
     return true;
 }
 

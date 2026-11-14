@@ -312,14 +312,14 @@ int CLIApp::handleDiff(const std::vector<std::string>& args) {
     printInfo("Loading base device tree: " + baseFile);
     auto baseTree = std::make_shared<DeviceTree>();
     if (!baseTree->loadFromFile(baseFile)) {
-        printError("Failed to load base file: " + baseFile);
+        printError("Failed to load base file: " + baseFile + "\n" + baseTree->getLoadError());
         return DIFF_EXIT_ERROR;
     }
     
     printInfo("Loading overlay device tree: " + overlayFile);
     auto overlayTree = std::make_shared<DeviceTree>();
     if (!overlayTree->loadFromFile(overlayFile)) {
-        printError("Failed to load overlay file: " + overlayFile);
+        printError("Failed to load overlay file: " + overlayFile + "\n" + overlayTree->getLoadError());
         return DIFF_EXIT_ERROR;
     }
     
@@ -493,7 +493,7 @@ int CLIApp::handleHelp(const std::vector<std::string>& args) {
 bool CLIApp::loadDeviceTree(const std::string& filename) {
     deviceTree_ = std::make_shared<DeviceTree>();
     if (!deviceTree_->loadFromFile(filename)) {
-        printError("Failed to load device tree file: " + filename);
+        printError("Failed to load device tree file: " + filename + "\n" + deviceTree_->getLoadError());
         return false;
     }
     return true;

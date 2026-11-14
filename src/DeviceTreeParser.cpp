@@ -323,7 +323,6 @@ std::shared_ptr<DeviceTree> DTBParser::parse(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         lastError_ = "Cannot open file: " + filename;
-        std::cerr << "DTB parsing error: " << lastError_ << std::endl;
         return nullptr;
     }
 
@@ -332,7 +331,6 @@ std::shared_ptr<DeviceTree> DTBParser::parse(const std::string& filename) {
 
     auto tree = parseBuffer(buffer);
     if (!tree) {
-        std::cerr << "DTB parsing error: " << lastError_ << std::endl;
         return nullptr;
     }
     tree->setSourceFile(filename);
@@ -413,7 +411,6 @@ std::shared_ptr<DeviceTree> DTSParser::parse(const std::string& filename) {
     auto finish = [&](std::string error) -> std::shared_ptr<DeviceTree> {
         while (!error.empty() && error.back() == '\n') error.pop_back();
         lastError_ = std::move(error);
-        std::cerr << "DTS parsing error: " << lastError_ << std::endl;
         return nullptr;
     };
 

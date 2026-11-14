@@ -309,3 +309,13 @@ TEST_F(DTSParserTest, MissingDtcIsReported) {
     EXPECT_FALSE(parser.parse(kData + "/board.dts"));
     EXPECT_NE(parser.lastError().find("dtc"), std::string::npos) << parser.lastError();
 }
+
+TEST_F(DTSParserTest, DeviceTreeLoadReportsDtcError) {
+    auto file = tmp_.write("broken.dts", "/dts-v1/;\n/ { a = <1; };\n");
+    DeviceTree tree;
+    EXPECT_FALSE(tree.loadFromFile(file));
+    EXPECT_NE(tree.getLoadError().find("broken.dts:2."), std::string::npos) << tree.getLoadError();
+
+    ASSERT_TRUE(tree.loadFromFile(kData + "/board.dts"));
+    EXPECT_TRUE(tree.getLoadError().empty());
+}
