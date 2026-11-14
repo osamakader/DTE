@@ -319,3 +319,37 @@ TEST_F(DTSParserTest, DeviceTreeLoadReportsDtcError) {
     ASSERT_TRUE(tree.loadFromFile(kData + "/board.dts"));
     EXPECT_TRUE(tree.getLoadError().empty());
 }
+
+TEST_F(DTSParserTest, LoadOptionsPassIncludePaths) {
+    DeviceTree tree;
+    EXPECT_FALSE(tree.loadFromFile(kData + "/needs-extra-include.dts"));
+    ASSERT_TRUE(tree.loadFromFile(kData + "/needs-extra-include.dts",
+                                  DTE::LoadOptions{{kData + "/extra-include"}}))
+        << tree.getLoadError();
+    EXPECT_EQ(rawString(tree, "/", "model"), "From Extra Include Path");
+}
+
+TEST_F(DTSParserTest, DtsToDtbPreprocessesAndUsesIncludePaths) {
+    const std::string out = (tmp_.path() / "out.dtb").string();
+    std::string error;
+    EXPECT_FALSE(DTE::DeviceTreeUtils::dtsToDtb(kData + "/needs-extra-include.dts", out, {}, &error));
+    EXPECT_NE(error.find("board-config.h"), std::string::npos) << error;
+
+    ASSERT_TRUE(DTE::DeviceTreeUtils::dtsToDtb(kData + "/needs-extra-include.dts", out,
+                                               {kData + "/extra-include"}, &error))
+        << error;
+    DeviceTree tree;
+    ASSERT_TRUE(tree.loadFromFile(out));
+    EXPECT_EQ(rawString(tree, "/", "model"), "From Extra Include Path");
+
+    ASSERT_TRUE(DTE::DeviceTreeUtils::dtsToDtb(kData + "/preprocessed/board.dts", out, {}, &error)) << error;
+    ASSERT_TRUE(tree.loadFromFile(out));
+    EXPECT_EQ(cells(tree, "/soc/serial@10000000", "interrupts"), (std::vector<uint32_t>{0, 33, 4}));
+}
+
+TEST_F(DTSParserTest, DtbToDtsReportsErrors) {
+    std::string error;
+    auto bad = tmp_.write("bad.dtb", std::string(64, '\0'));
+    EXPECT_FALSE(DTE::DeviceTreeUtils::dtbToDts(bad, (tmp_.path() / "o.dts").string(), &error));
+    EXPECT_FALSE(error.empty());
+}

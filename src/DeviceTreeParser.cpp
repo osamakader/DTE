@@ -404,14 +404,15 @@ bool DTSParser::needsPreprocessing(const std::string& filename) {
     return false;
 }
 
-std::shared_ptr<DeviceTree> DTSParser::parse(const std::string& filename) {
+bool DTSParser::compile(const std::string& filename, std::string& blob) {
     lastError_.clear();
     lastWarnings_.clear();
+    blob.clear();
 
-    auto finish = [&](std::string error) -> std::shared_ptr<DeviceTree> {
+    auto finish = [&](std::string error) {
         while (!error.empty() && error.back() == '\n') error.pop_back();
         lastError_ = std::move(error);
-        return nullptr;
+        return false;
     };
 
     if (!std::ifstream(filename)) {
@@ -467,13 +468,23 @@ std::shared_ptr<DeviceTree> DTSParser::parse(const std::string& filename) {
                                            : r.stderrData);
     }
 
-    DTBParser dtb;
-    auto tree = dtb.parseBuffer(reinterpret_cast<const uint8_t*>(r.stdoutData.data()),
-                                r.stdoutData.size());
-    if (!tree) {
-        return finish("Could not read dtc output: " + dtb.lastError());
-    }
     lastWarnings_ = r.stderrData;
+    blob = std::move(r.stdoutData);
+    return true;
+}
+
+std::shared_ptr<DeviceTree> DTSParser::parse(const std::string& filename) {
+    std::string blob;
+    if (!compile(filename, blob)) {
+        return nullptr;
+    }
+
+    DTBParser dtb;
+    auto tree = dtb.parseBuffer(reinterpret_cast<const uint8_t*>(blob.data()), blob.size());
+    if (!tree) {
+        lastError_ = "Could not read dtc output: " + dtb.lastError();
+        return nullptr;
+    }
     tree->setSourceFile(filename);
     return tree;
 }
@@ -508,52 +519,74 @@ namespace DeviceTreeUtils {
 
 namespace {
 
-bool runDtc(const std::vector<std::string>& args) {
+bool setError(std::string* error, std::string message) {
+    while (!message.empty() && message.back() == '\n') message.pop_back();
+    if (error) *error = std::move(message);
+    return false;
+}
+
+bool runDtc(const std::vector<std::string>& args, std::string* error) {
     std::vector<std::string> argv{dtcExecutable()};
     argv.insert(argv.end(), args.begin(), args.end());
     auto r = runProcess(argv);
     if (!r.launched) {
-        std::cerr << "Error: " << r.error << " (install device-tree-compiler or set DTE_DTC)" << std::endl;
-        return false;
+        return setError(error, r.error + " (install device-tree-compiler or set DTE_DTC)");
     }
-    if (!r.ok() && !r.stderrData.empty()) {
-        std::cerr << r.stderrData;
+    if (!r.ok()) {
+        return setError(error, r.stderrData.empty() ? "dtc failed with exit code " + std::to_string(r.exitCode)
+                                                    : r.stderrData);
     }
-    return r.ok();
+    return true;
+}
+
+bool isDtb(const std::string& filename) {
+    return dynamic_cast<DTBParser*>(DeviceTreeParserFactory::createParser(filename).get()) != nullptr;
 }
 
 } // namespace
 
-bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile) {
-    return runDtc({"-q", "-I", "dtb", "-O", "dts", "-o", dtsFile, dtbFile});
+bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile, std::string* error) {
+    return runDtc({"-q", "-I", "dtb", "-O", "dts", "-o", dtsFile, dtbFile}, error);
 }
 
-bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile) {
-    return runDtc({"-q", "-I", "dts", "-O", "dtb", "-o", dtbFile, dtsFile});
+bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile,
+              const std::vector<std::string>& includePaths, std::string* error) {
+    DTSParser parser;
+    parser.setIncludePaths(includePaths);
+    std::string blob;
+    if (!parser.compile(dtsFile, blob)) {
+        return setError(error, parser.lastError());
+    }
+    std::ofstream out(dtbFile, std::ios::binary | std::ios::trunc);
+    if (!out.write(blob.data(), static_cast<std::streamsize>(blob.size()))) {
+        return setError(error, "Cannot write file: " + dtbFile);
+    }
+    return true;
 }
 
-bool validateDeviceTree(const std::string& filename) {
-    auto parser = DeviceTreeParserFactory::createParser(filename);
-    const std::string inputFormat = dynamic_cast<DTBParser*>(parser.get()) ? "dtb" : "dts";
-    return runDtc({"-q", "-I", inputFormat, "-O", "dtb", "-o", "/dev/null", filename});
+bool validateDeviceTree(const std::string& filename, std::string* error) {
+    if (isDtb(filename)) {
+        return runDtc({"-q", "-I", "dtb", "-O", "dtb", "-o", "/dev/null", filename}, error);
+    }
+    DTSParser parser;
+    std::string blob;
+    return parser.compile(filename, blob) || setError(error, parser.lastError());
 }
 
 std::string getDeviceTreeInfo(const std::string& filename) {
-    auto parser = DeviceTreeParserFactory::createParser(filename);
-    const std::string inputFormat = dynamic_cast<DTBParser*>(parser.get()) ? "dtb" : "dts";
-    auto r = runProcess({dtcExecutable(), "-I", inputFormat, "-O", "dts", filename});
+    auto r = runProcess({dtcExecutable(), "-I", isDtb(filename) ? "dtb" : "dts", "-O", "dts", filename});
     if (!r.launched) {
         return r.error;
     }
     return r.stdoutData + r.stderrData;
 }
 
-bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile) {
+bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile, std::string* error) {
     auto r = runProcess({"extract-dtb.py", "-o", outputFile, kernelFile});
     if (!r.launched) {
-        std::cerr << "Error: " << r.error << std::endl;
+        return setError(error, r.error);
     }
-    return r.ok();
+    return r.ok() || setError(error, r.stderrData);
 }
 
 } // namespace DeviceTreeUtils

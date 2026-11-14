@@ -102,6 +102,12 @@ struct MemoryReservation {
     bool operator==(const MemoryReservation&) const = default;
 };
 
+// Options for DeviceTree::loadFromFile
+struct LoadOptions {
+    // Extra include directories for DTS sources (#include and /include/)
+    std::vector<std::string> includePaths;
+};
+
 // Device tree
 class DeviceTree {
 public:
@@ -114,7 +120,7 @@ public:
     // File operations
     // Loads a DTB or DTS file. On failure returns false, leaves the tree
     // unchanged and sets getLoadError().
-    bool loadFromFile(const std::string& filename);
+    bool loadFromFile(const std::string& filename, const LoadOptions& options = {});
     const std::string& getLoadError() const { return loadError_; }
     bool saveToFile(const std::string& filename, bool asDTS = false) const;
     

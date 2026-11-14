@@ -52,6 +52,10 @@ public:
     std::shared_ptr<DeviceTree> parse(const std::string& filename) override;
     bool canParse(const std::string& filename) const override;
 
+    // Compiles the source to a DTB blob without parsing it (used for
+    // conversion). Returns false and sets lastError() on failure.
+    bool compile(const std::string& filename, std::string& blob);
+
     // Warnings dtc printed during the last successful parse.
     const std::string& lastWarnings() const { return lastWarnings_; }
 
@@ -77,13 +81,17 @@ public:
     static std::vector<std::unique_ptr<DeviceTreeParser>> getAllParsers();
 };
 
-// Utility functions for device tree operations
+// Utility functions for device tree operations. On failure they return
+// false and, if `error` is given, store the reason there.
 namespace DeviceTreeUtils {
-    bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile);
-    bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile);
-    bool validateDeviceTree(const std::string& filename);
+    bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile, std::string* error = nullptr);
+    // Compiles like DTSParser (C preprocessing when needed, include paths).
+    bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile,
+                  const std::vector<std::string>& includePaths = {}, std::string* error = nullptr);
+    bool validateDeviceTree(const std::string& filename, std::string* error = nullptr);
     std::string getDeviceTreeInfo(const std::string& filename);
-    bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile);
+    bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile,
+                           std::string* error = nullptr);
 }
 
 } // namespace DTE

@@ -267,13 +267,17 @@ std::vector<std::shared_ptr<DeviceTreeNode>> DeviceTreeNode::findNodesByPattern(
 DeviceTree::DeviceTree()
     : root_(std::make_shared<DeviceTreeNode>("/")) {}
 
-bool DeviceTree::loadFromFile(const std::string& filename) {
+bool DeviceTree::loadFromFile(const std::string& filename, const LoadOptions& options) {
     auto parser = DeviceTreeParserFactory::createParser(filename);
     if (!parser) {
         loadError_ = std::ifstream(filename)
             ? "Unrecognized file format (expected a DTB or a .dts/.dtsi/.dtso file): " + filename
             : "Cannot open file: " + filename;
         return false;
+    }
+    
+    if (auto* dts = dynamic_cast<DTSParser*>(parser.get())) {
+        dts->setIncludePaths(options.includePaths);
     }
     
     auto parsedTree = parser->parse(filename);
