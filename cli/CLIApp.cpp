@@ -227,6 +227,8 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " diff base.dtb overlay.dtb\n";
         std::cout << "  " << programName_ << " diff original.dts modified.dts\n";
+        std::cout << "\n" << Colors::BOLD << "Exit status:" << Colors::RESET << "\n";
+        std::cout << "  0 if the trees are identical, 1 if they differ, 2 on error\n";
     } else if (command == "export") {
         std::cout << "\n" << Colors::BOLD << "Supported formats:" << Colors::RESET << "\n";
         std::cout << "  json    - JSON format\n";
@@ -283,10 +285,15 @@ int CLIApp::handleValidate(const std::vector<std::string>& args) {
     return deviceTree_->validate() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+// Exit status follows diff(1): 0 = identical, 1 = different, 2 = error.
+constexpr int DIFF_EXIT_SAME = 0;
+constexpr int DIFF_EXIT_DIFFERENT = 1;
+constexpr int DIFF_EXIT_ERROR = 2;
+
 int CLIApp::handleDiff(const std::vector<std::string>& args) {
     if (args.size() != 2) {
         printError("Usage: " + commands_["diff"].usage);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     std::string baseFile = args[0];
@@ -294,33 +301,33 @@ int CLIApp::handleDiff(const std::vector<std::string>& args) {
     
     if (!fileExists(baseFile)) {
         printError("Base file not found: " + baseFile);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     if (!fileExists(overlayFile)) {
         printError("Overlay file not found: " + overlayFile);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     printInfo("Loading base device tree: " + baseFile);
     auto baseTree = std::make_shared<DeviceTree>();
     if (!baseTree->loadFromFile(baseFile)) {
         printError("Failed to load base file: " + baseFile);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     printInfo("Loading overlay device tree: " + overlayFile);
     auto overlayTree = std::make_shared<DeviceTree>();
     if (!overlayTree->loadFromFile(overlayFile)) {
         printError("Failed to load overlay file: " + overlayFile);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     printInfo("Generating diff...");
     DeviceTreeDiff diff(baseTree, overlayTree);
     printDiffResults(diff);
     
-    return diff.getTotalChanges() > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return diff.getTotalChanges() > 0 ? DIFF_EXIT_DIFFERENT : DIFF_EXIT_SAME;
 }
 
 int CLIApp::handleExport(const std::vector<std::string>& args) {
@@ -581,6 +588,16 @@ void CLIApp::printDiffResults(const DeviceTreeDiff& diff) const {
                 std::cout << ":" << Colors::CYAN << change.propertyName << Colors::RESET;
             }
             std::cout << " - " << change.description << "\n";
+            if (change.type == DiffType::Modified || change.type == DiffType::Removed) {
+                if (!change.propertyName.empty()) {
+                    std::cout << "      " << Colors::RED << "- " << change.oldValue << Colors::RESET << "\n";
+                }
+            }
+            if (change.type == DiffType::Modified || change.type == DiffType::Added) {
+                if (!change.propertyName.empty()) {
+                    std::cout << "      " << Colors::GREEN << "+ " << change.newValue << Colors::RESET << "\n";
+                }
+            }
         }
     }
 }
