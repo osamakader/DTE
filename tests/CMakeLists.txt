@@ -8,6 +8,7 @@ add_executable(dte-tests
     DTBParserTest.cpp
     DTBIntegrationTest.cpp
     DTSParserTest.cpp
+    DiffTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )

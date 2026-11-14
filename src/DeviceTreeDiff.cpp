@@ -1,4 +1,5 @@
 #include "DeviceTreeDiff.h"
+#include "Escape.h"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -59,20 +60,46 @@ size_t DeviceTreeDiff::getTotalChanges() const {
     return generateDiff().size();
 }
 
+namespace {
+
+size_t countType(const std::vector<DiffEntry>& diff, DiffType type) {
+    size_t n = 0;
+    for (const auto& e : diff) {
+        if (e.type == type) ++n;
+    }
+    return n;
+}
+
+std::string childPath(const std::string& parent, const std::string& name) {
+    return parent == "/" ? "/" + name : parent + "/" + name;
+}
+
+const char* typeName(DiffType type) {
+    switch (type) {
+    case DiffType::Added: return "added";
+    case DiffType::Removed: return "removed";
+    case DiffType::Modified: return "modified";
+    default: return "unchanged";
+    }
+}
+
+} // namespace
+
 size_t DeviceTreeDiff::getAddedCount() const {
-    return getAddedNodes().size();
+    return countType(generateDiff(), DiffType::Added);
 }
 
 size_t DeviceTreeDiff::getRemovedCount() const {
-    return getRemovedNodes().size();
+    return countType(generateDiff(), DiffType::Removed);
 }
 
 size_t DeviceTreeDiff::getModifiedCount() const {
-    return getModifiedProperties().size();
+    return countType(generateDiff(), DiffType::Modified);
 }
 
 std::string DeviceTreeDiff::exportAsJSON() const {
-    auto diff = generateDiff();
+    using detail::jsonQuote;
+    const auto& diff = generateDiff();
     
     std::ostringstream oss;
     oss << "{\n";
@@ -81,36 +108,32 @@ std::string DeviceTreeDiff::exportAsJSON() const {
     oss << "    \"added\": " << getAddedCount() << ",\n";
     oss << "    \"removed\": " << getRemovedCount() << ",\n";
     oss << "    \"modified\": " << getModifiedCount() << ",\n";
-    oss << "    \"changes\": [\n";
+    oss << "    \"changes\": [";
     
     for (size_t i = 0; i < diff.size(); ++i) {
         const auto& entry = diff[i];
+        oss << (i == 0 ? "\n" : ",\n");
         oss << "      {\n";
-        oss << "        \"type\": \"";
-        switch (entry.type) {
-            case DiffType::Added: oss << "added"; break;
-            case DiffType::Removed: oss << "removed"; break;
-            case DiffType::Modified: oss << "modified"; break;
-            default: oss << "unchanged"; break;
-        }
-        oss << "\",\n";
-        oss << "        \"path\": \"" << entry.path << "\",\n";
+        oss << "        \"type\": " << jsonQuote(typeName(entry.type)) << ",\n";
+        oss << "        \"path\": " << jsonQuote(entry.path) << ",\n";
         if (!entry.propertyName.empty()) {
-            oss << "        \"property\": \"" << entry.propertyName << "\",\n";
+            oss << "        \"property\": " << jsonQuote(entry.propertyName) << ",\n";
         }
-        if (!entry.oldValue.empty()) {
-            oss << "        \"old_value\": \"" << entry.oldValue << "\",\n";
+        if (entry.type == DiffType::Modified || entry.type == DiffType::Removed) {
+            if (!entry.propertyName.empty()) {
+                oss << "        \"old_value\": " << jsonQuote(entry.oldValue) << ",\n";
+            }
         }
-        if (!entry.newValue.empty()) {
-            oss << "        \"new_value\": \"" << entry.newValue << "\",\n";
+        if (entry.type == DiffType::Modified || entry.type == DiffType::Added) {
+            if (!entry.propertyName.empty()) {
+                oss << "        \"new_value\": " << jsonQuote(entry.newValue) << ",\n";
+            }
         }
-        oss << "        \"description\": \"" << entry.description << "\"\n";
+        oss << "        \"description\": " << jsonQuote(entry.description) << "\n";
         oss << "      }";
-        if (i < diff.size() - 1) oss << ",";
-        oss << "\n";
     }
     
-    oss << "    ]\n";
+    oss << (diff.empty() ? "]\n" : "\n    ]\n");
     oss << "  }\n";
     oss << "}\n";
     
@@ -118,7 +141,8 @@ std::string DeviceTreeDiff::exportAsJSON() const {
 }
 
 std::string DeviceTreeDiff::exportAsYAML() const {
-    auto diff = generateDiff();
+    using detail::jsonQuote;
+    const auto& diff = generateDiff();
     
     std::ostringstream oss;
     oss << "diff:\n";
@@ -126,28 +150,21 @@ std::string DeviceTreeDiff::exportAsYAML() const {
     oss << "  added: " << getAddedCount() << "\n";
     oss << "  removed: " << getRemovedCount() << "\n";
     oss << "  modified: " << getModifiedCount() << "\n";
-    oss << "  changes:\n";
+    oss << "  changes:" << (diff.empty() ? " []\n" : "\n");
     
     for (const auto& entry : diff) {
-        oss << "    - type: ";
-        switch (entry.type) {
-            case DiffType::Added: oss << "added"; break;
-            case DiffType::Removed: oss << "removed"; break;
-            case DiffType::Modified: oss << "modified"; break;
-            default: oss << "unchanged"; break;
-        }
-        oss << "\n";
-        oss << "      path: " << entry.path << "\n";
+        oss << "    - type: " << typeName(entry.type) << "\n";
+        oss << "      path: " << jsonQuote(entry.path) << "\n";
         if (!entry.propertyName.empty()) {
-            oss << "      property: " << entry.propertyName << "\n";
+            oss << "      property: " << jsonQuote(entry.propertyName) << "\n";
+            if (entry.type != DiffType::Added) {
+                oss << "      old_value: " << jsonQuote(entry.oldValue) << "\n";
+            }
+            if (entry.type != DiffType::Removed) {
+                oss << "      new_value: " << jsonQuote(entry.newValue) << "\n";
+            }
         }
-        if (!entry.oldValue.empty()) {
-            oss << "      old_value: " << entry.oldValue << "\n";
-        }
-        if (!entry.newValue.empty()) {
-            oss << "      new_value: " << entry.newValue << "\n";
-        }
-        oss << "      description: " << entry.description << "\n";
+        oss << "      description: " << jsonQuote(entry.description) << "\n";
     }
     
     return oss.str();
@@ -215,79 +232,67 @@ void DeviceTreeDiff::generateDiffInternal() const {
     diffGenerated_ = true;
 }
 
+void DeviceTreeDiff::addWholeNode(const std::shared_ptr<DeviceTreeNode>& node,
+                                  const std::string& path, DiffType type) const {
+    const bool added = type == DiffType::Added;
+
+    DiffEntry entry;
+    entry.type = type;
+    entry.path = path;
+    entry.description = (added ? "Node added: " : "Node removed: ") + node->getName();
+    diffCache_.push_back(entry);
+
+    for (const auto& prop : node->getProperties()) {
+        DiffEntry p;
+        p.type = type;
+        p.path = path;
+        p.propertyName = prop.getName();
+        (added ? p.newValue : p.oldValue) = propertyValueToString(prop);
+        p.description = (added ? "Property added: " : "Property removed: ") + prop.getName();
+        diffCache_.push_back(p);
+    }
+
+    for (const auto& child : node->getChildren()) {
+        addWholeNode(child, childPath(path, child->getName()), type);
+    }
+}
+
 void DeviceTreeDiff::compareNodes(const std::shared_ptr<DeviceTreeNode>& baseNode,
                                  const std::shared_ptr<DeviceTreeNode>& overlayNode,
                                  const std::string& path) const {
     if (!baseNode && !overlayNode) {
         return;
     }
-    
-    if (!baseNode && overlayNode) {
-        // Node added in overlay
-        DiffEntry entry;
-        entry.type = DiffType::Added;
-        entry.path = path;
-        entry.description = "Node added: " + overlayNode->getName();
-        diffCache_.push_back(entry);
-        
-        // Recursively add all child nodes
-        for (const auto& child : overlayNode->getChildren()) {
-            std::string childPath = path + "/" + child->getName();
-            compareNodes(nullptr, child, childPath);
-        }
+    if (!baseNode) {
+        addWholeNode(overlayNode, path, DiffType::Added);
+        return;
+    }
+    if (!overlayNode) {
+        addWholeNode(baseNode, path, DiffType::Removed);
         return;
     }
     
-    if (baseNode && !overlayNode) {
-        // Node removed in overlay
-        DiffEntry entry;
-        entry.type = DiffType::Removed;
-        entry.path = path;
-        entry.description = "Node removed: " + baseNode->getName();
-        diffCache_.push_back(entry);
-        
-        // Recursively remove all child nodes
-        for (const auto& child : baseNode->getChildren()) {
-            std::string childPath = path + "/" + child->getName();
-            compareNodes(child, nullptr, childPath);
-        }
-        return;
-    }
-    
-    // Both nodes exist, compare properties
     compareProperties(baseNode, overlayNode, path);
     
-    // Compare child nodes
+    // Children are matched by name. Output follows the base tree's order,
+    // followed by nodes that only exist in the overlay, in overlay order.
     std::map<std::string, std::shared_ptr<DeviceTreeNode>> baseChildren;
     std::map<std::string, std::shared_ptr<DeviceTreeNode>> overlayChildren;
-    
     for (const auto& child : baseNode->getChildren()) {
         baseChildren[child->getName()] = child;
     }
-    
     for (const auto& child : overlayNode->getChildren()) {
         overlayChildren[child->getName()] = child;
     }
     
-    // Find added, removed, and common children
-    for (const auto& pair : overlayChildren) {
-        auto it = baseChildren.find(pair.first);
-        if (it == baseChildren.end()) {
-            // Child added
-            std::string childPath = path + "/" + pair.first;
-            compareNodes(nullptr, pair.second, childPath);
-        } else {
-            // Child exists in both, compare recursively
-            std::string childPath = path + "/" + pair.first;
-            compareNodes(it->second, pair.second, childPath);
-        }
+    for (const auto& child : baseNode->getChildren()) {
+        auto it = overlayChildren.find(child->getName());
+        compareNodes(child, it == overlayChildren.end() ? nullptr : it->second,
+                     childPath(path, child->getName()));
     }
-    
-    for (const auto& pair : baseChildren) {
-        if (overlayChildren.find(pair.first) == overlayChildren.end()) {
-            // Child removed
-            std::string childPath = path + "/" + pair.first;
-            compareNodes(pair.second, nullptr, childPath);
+    for (const auto& child : overlayNode->getChildren()) {
+        if (!baseChildren.count(child->getName())) {
+            compareNodes(nullptr, child, childPath(path, child->getName()));
         }
     }
 }
@@ -295,56 +300,37 @@ void DeviceTreeDiff::compareNodes(const std::shared_ptr<DeviceTreeNode>& baseNod
 void DeviceTreeDiff::compareProperties(const std::shared_ptr<DeviceTreeNode>& baseNode,
                                       const std::shared_ptr<DeviceTreeNode>& overlayNode,
                                       const std::string& path) const {
-    auto baseProps = baseNode->getProperties();
-    auto overlayProps = overlayNode->getProperties();
-    
-    std::map<std::string, DeviceTreeProperty> basePropMap;
-    std::map<std::string, DeviceTreeProperty> overlayPropMap;
-    
-    for (const auto& prop : baseProps) {
-        basePropMap[prop.getName()] = prop;
+    // Same ordering rule as for child nodes.
+    for (const auto& baseProp : baseNode->getProperties()) {
+        const DeviceTreeProperty* overlayProp =
+            static_cast<const DeviceTreeNode&>(*overlayNode).findProperty(baseProp.getName());
+
+        DiffEntry entry;
+        entry.path = path;
+        entry.propertyName = baseProp.getName();
+        if (!overlayProp) {
+            entry.type = DiffType::Removed;
+            entry.oldValue = propertyValueToString(baseProp);
+            entry.description = "Property removed: " + baseProp.getName();
+        } else if (!propertiesEqual(baseProp, *overlayProp)) {
+            entry.type = DiffType::Modified;
+            entry.oldValue = propertyValueToString(baseProp);
+            entry.newValue = propertyValueToString(*overlayProp);
+            entry.description = "Property modified: " + baseProp.getName();
+        } else {
+            continue;
+        }
+        diffCache_.push_back(entry);
     }
     
-    for (const auto& prop : overlayProps) {
-        overlayPropMap[prop.getName()] = prop;
-    }
-    
-    // Find added, removed, and modified properties
-    for (const auto& pair : overlayPropMap) {
-        auto it = basePropMap.find(pair.first);
-        if (it == basePropMap.end()) {
-            // Property added
+    for (const auto& overlayProp : overlayNode->getProperties()) {
+        if (!static_cast<const DeviceTreeNode&>(*baseNode).findProperty(overlayProp.getName())) {
             DiffEntry entry;
             entry.type = DiffType::Added;
             entry.path = path;
-            entry.propertyName = pair.first;
-            entry.newValue = propertyValueToString(pair.second);
-            entry.description = "Property added: " + pair.first;
-            diffCache_.push_back(entry);
-        } else {
-            // Property exists in both, check if modified
-            if (!propertiesEqual(it->second, pair.second)) {
-                DiffEntry entry;
-                entry.type = DiffType::Modified;
-                entry.path = path;
-                entry.propertyName = pair.first;
-                entry.oldValue = propertyValueToString(it->second);
-                entry.newValue = propertyValueToString(pair.second);
-                entry.description = "Property modified: " + pair.first;
-                diffCache_.push_back(entry);
-            }
-        }
-    }
-    
-    for (const auto& pair : basePropMap) {
-        if (overlayPropMap.find(pair.first) == overlayPropMap.end()) {
-            // Property removed
-            DiffEntry entry;
-            entry.type = DiffType::Removed;
-            entry.path = path;
-            entry.propertyName = pair.first;
-            entry.oldValue = propertyValueToString(pair.second);
-            entry.description = "Property removed: " + pair.first;
+            entry.propertyName = overlayProp.getName();
+            entry.newValue = propertyValueToString(overlayProp);
+            entry.description = "Property added: " + overlayProp.getName();
             diffCache_.push_back(entry);
         }
     }

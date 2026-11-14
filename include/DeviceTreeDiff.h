@@ -38,7 +38,9 @@ public:
     std::vector<DiffEntry> getRemovedNodes() const;
     std::vector<DiffEntry> getModifiedProperties() const;
     
-    // Summary statistics
+    // Summary statistics. Added/removed/modified count every entry of that
+    // type (nodes and properties), so they always sum to getTotalChanges().
+    // An added or removed node also contributes one entry per property.
     size_t getTotalChanges() const;
     size_t getAddedCount() const;
     size_t getRemovedCount() const;
@@ -64,6 +66,8 @@ private:
     void compareNodes(const std::shared_ptr<DeviceTreeNode>& baseNode,
                      const std::shared_ptr<DeviceTreeNode>& overlayNode,
                      const std::string& path) const;
+    void addWholeNode(const std::shared_ptr<DeviceTreeNode>& node,
+                      const std::string& path, DiffType type) const;
     void compareProperties(const std::shared_ptr<DeviceTreeNode>& baseNode,
                           const std::shared_ptr<DeviceTreeNode>& overlayNode,
                           const std::string& path) const;
