@@ -22,10 +22,10 @@ A modern C++ and Qt application for visualizing and editing Device Tree (DTB/DTS
 - Search and filter capabilities
 
 ### CLI Features
-- Colored output with ANSI support
+- Colored output on terminals (plain when piped, or with `--no-color` / `NO_COLOR`)
 - Comprehensive error handling and validation
-- Multiple export formats (JSON, YAML, DTS, DTB)
-- File conversion between DTB and DTS
+- Export to JSON and YAML
+- File conversion between DTB and DTS, including kernel-style sources with `#include`
 - Search and list functionality
 - Progress indicators and detailed feedback
 
@@ -161,13 +161,17 @@ Validate a device tree file for syntax and structure errors.
 - Detailed error reporting
 
 #### `diff <base_file> <overlay_file>`
-Compare two device tree files and show differences.
+Compare two device tree files and show differences. Files may be any mix of
+DTB and DTS; a DTS and its compiled DTB compare as identical.
 
 **Output includes:**
-- Added/removed/modified nodes
-- Property changes
+- Added/removed/modified nodes and properties (an added or removed node also
+  lists its properties)
+- Old (`-`) and new (`+`) values in DTS syntax
 - Color-coded diff output
 - Summary statistics
+
+**Exit status** (like `diff(1)`): `0` identical, `1` different, `2` error.
 
 #### `export <input_file> <format> <output_file>`
 Export device tree to different formats.
@@ -175,15 +179,27 @@ Export device tree to different formats.
 **Supported formats:**
 - `json` - JSON format for automation
 - `yaml` - YAML format for configuration
-- `dts` - Device Tree Source format
-- `dtb` - Device Tree Blob format
+
+Both use the same schema: source file, boot CPU id, memory reservations, and
+nodes with `name`, `path`, `properties` and `children`, in tree order. String
+properties become strings, string lists become arrays of strings, and cells and
+bytes become arrays of numbers. Use `convert` to produce DTS or DTB files.
 
 #### `convert <input_file> <output_file>`
 Convert between DTB and DTS formats.
 
 **Supported conversions:**
 - DTB → DTS (decompilation)
-- DTS → DTB (compilation)
+- DTS → DTB (compilation, with C preprocessing when the source uses `#include`/`#define`)
+
+The input format is detected from the file contents; the output format from
+the extension (`.dtb`/`.dtbo` or `.dts`/`.dtsi`/`.dtso`).
+
+#### Global options
+- `-I DIR`, `--include DIR` - add an include directory for DTS sources (repeatable)
+- `--no-color` - disable colored output (`NO_COLOR=1` also works)
+
+Status messages (`INFO:`, `ERROR:`, ...) go to stderr, so stdout can be piped.
 
 #### `search <filename> <pattern>`
 Search for nodes or properties matching a pattern.
@@ -209,7 +225,10 @@ List the structure of a device tree.
 
 ```bash
 # Get information about a device tree
-./bin/dte-cli info /proc/device-tree
+./bin/dte-cli info device.dtb
+
+# Load a kernel-style DTS that includes dt-bindings headers
+./bin/dte-cli -I linux/include list linux/arch/arm64/boot/dts/vendor/board.dts
 
 # Validate a custom device tree
 ./bin/dte-cli validate my-device.dts
