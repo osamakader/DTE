@@ -413,10 +413,11 @@ void MainWindow::exportAsDTS() {
         "DTS Files (*.dts);;All Files (*)");
     
     if (!fileName.isEmpty()) {
-        if (deviceTree_->saveToFile(fileName.toStdString(), true)) {
+        std::string error;
+        if (deviceTree_->saveToFile(fileName.toStdString(), true, &error)) {
             showSuccess("Export", "Successfully exported to " + fileName);
         } else {
-            showError("Export Error", "Failed to write file: " + fileName);
+            showError("Export Error", QString::fromStdString(error));
         }
     }
 }
@@ -432,10 +433,11 @@ void MainWindow::exportAsDTB() {
         "DTB Files (*.dtb);;All Files (*)");
     
     if (!fileName.isEmpty()) {
-        if (deviceTree_->saveToFile(fileName.toStdString(), false)) {
+        std::string error;
+        if (deviceTree_->saveToFile(fileName.toStdString(), false, &error)) {
             showSuccess("Export", "Successfully exported to " + fileName);
         } else {
-            showError("Export Error", "Failed to write file: " + fileName);
+            showError("Export Error", QString::fromStdString(error));
         }
     }
 }

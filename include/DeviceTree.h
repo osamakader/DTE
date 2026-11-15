@@ -122,7 +122,10 @@ public:
     // unchanged and sets getLoadError().
     bool loadFromFile(const std::string& filename, const LoadOptions& options = {});
     const std::string& getLoadError() const { return loadError_; }
-    bool saveToFile(const std::string& filename, bool asDTS = false) const;
+    // Writes the tree as DTS source (asDTS) or as a DTB blob. Returns false
+    // on failure and, if `error` is given, stores the reason there.
+    bool saveToFile(const std::string& filename, bool asDTS = false,
+                    std::string* error = nullptr) const;
     
     // Source file information
     const std::string& getSourceFile() const { return sourceFile_; }
@@ -138,6 +141,12 @@ public:
     bool validate() const;
     std::vector<std::string> getValidationErrors() const;
     
+    // DTS source accepted by dtc, and an FDT v17 blob. Both work without
+    // dtc. Note that a DTB does not record value types, so reading it back
+    // re-infers them (e.g. 64-bit cells come back as 32-bit cell pairs).
+    std::string exportAsDTS() const;
+    std::vector<uint8_t> exportAsDTB() const;
+
     // Export methods (built-in writers; see DeviceTree.cpp for the schema)
     std::string exportAsJSON() const;
     std::string exportAsYAML() const;

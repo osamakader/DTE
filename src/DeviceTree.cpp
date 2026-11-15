@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <fstream>
+#include <map>
 
 
 namespace DTE {
@@ -293,11 +294,208 @@ bool DeviceTree::loadFromFile(const std::string& filename, const LoadOptions& op
     return true;
 }
 
-bool DeviceTree::saveToFile(const std::string& filename, bool asDTS) const {
-    // TODO: Implement file saving
-    (void)filename;
-    (void)asDTS;
+bool DeviceTree::saveToFile(const std::string& filename, bool asDTS, std::string* error) const {
+    auto fail = [&](const std::string& msg) {
+        if (error) *error = msg;
+        return false;
+    };
+    if (!root_) {
+        return fail("No device tree to save");
+    }
+
+    std::ofstream out(filename, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return fail("Cannot open file for writing: " + filename);
+    }
+    if (asDTS) {
+        out << exportAsDTS();
+    } else {
+        auto blob = exportAsDTB();
+        out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
+    }
+    out.close();
+    if (!out) {
+        return fail("Failed to write file: " + filename);
+    }
     return true;
+}
+
+// DTS writer
+namespace {
+
+void writeDtsNode(std::ostream& os, const DeviceTreeNode& node, int depth) {
+    const std::string in(depth, '\t');
+    os << in << node.getName() << " {\n";
+
+    for (const auto& prop : node.getProperties()) {
+        os << in << '\t' << prop.getName();
+        const auto* str = std::get_if<std::string>(&prop.getValue());
+        if (!(str && str->empty())) {
+            // An empty string is how empty (boolean) properties are stored.
+            os << " = " << prop.getValueAsString();
+        }
+        os << ";\n";
+    }
+
+    const auto& children = node.getChildren();
+    for (size_t i = 0; i < children.size(); ++i) {
+        if (i > 0 || !node.getProperties().empty()) os << "\n";
+        writeDtsNode(os, *children[i], depth + 1);
+    }
+
+    os << in << "};\n";
+}
+
+} // namespace
+
+std::string DeviceTree::exportAsDTS() const {
+    std::ostringstream os;
+    os << "/dts-v1/;\n\n";
+    if (!memoryReservations_.empty()) {
+        os << std::hex;
+        for (const auto& r : memoryReservations_) {
+            os << "/memreserve/ 0x" << r.address << " 0x" << r.size << ";\n";
+        }
+        os << std::dec << "\n";
+    }
+    if (root_) {
+        writeDtsNode(os, *root_, 0);
+    }
+    return os.str();
+}
+
+// DTB writer (Devicetree Specification, chapter 5)
+namespace {
+
+class FdtWriter {
+public:
+    void beginNode(const std::string& name) {
+        be32(structBlock_, 0x1); // FDT_BEGIN_NODE
+        structBlock_.insert(structBlock_.end(), name.begin(), name.end());
+        structBlock_.push_back(0);
+        pad(structBlock_);
+    }
+
+    void endNode() { be32(structBlock_, 0x2); } // FDT_END_NODE
+
+    void property(const std::string& name, const std::vector<uint8_t>& value) {
+        be32(structBlock_, 0x3); // FDT_PROP
+        be32(structBlock_, static_cast<uint32_t>(value.size()));
+        be32(structBlock_, stringOffset(name));
+        structBlock_.insert(structBlock_.end(), value.begin(), value.end());
+        pad(structBlock_);
+    }
+
+    std::vector<uint8_t> finish(const std::vector<MemoryReservation>& reservations, uint32_t bootCpu) {
+        be32(structBlock_, 0x9); // FDT_END
+
+        constexpr size_t headerSize = 40;
+        const size_t rsvOff = headerSize;  // already 8-byte aligned
+        const size_t structOff = rsvOff + (reservations.size() + 1) * 16;
+        const size_t stringsOff = structOff + structBlock_.size();
+        const size_t total = stringsOff + stringsBlock_.size();
+
+        std::vector<uint8_t> out;
+        out.reserve(total);
+        be32(out, 0xd00dfeed);
+        be32(out, static_cast<uint32_t>(total));
+        be32(out, static_cast<uint32_t>(structOff));
+        be32(out, static_cast<uint32_t>(stringsOff));
+        be32(out, static_cast<uint32_t>(rsvOff));
+        be32(out, 17); // version
+        be32(out, 16); // last compatible version
+        be32(out, bootCpu);
+        be32(out, static_cast<uint32_t>(stringsBlock_.size()));
+        be32(out, static_cast<uint32_t>(structBlock_.size()));
+
+        for (const auto& r : reservations) {
+            be64(out, r.address);
+            be64(out, r.size);
+        }
+        be64(out, 0);
+        be64(out, 0);
+
+        out.insert(out.end(), structBlock_.begin(), structBlock_.end());
+        out.insert(out.end(), stringsBlock_.begin(), stringsBlock_.end());
+        return out;
+    }
+
+    static void be32(std::vector<uint8_t>& buf, uint32_t v) {
+        buf.push_back(uint8_t(v >> 24));
+        buf.push_back(uint8_t(v >> 16));
+        buf.push_back(uint8_t(v >> 8));
+        buf.push_back(uint8_t(v));
+    }
+
+    static void be64(std::vector<uint8_t>& buf, uint64_t v) {
+        be32(buf, uint32_t(v >> 32));
+        be32(buf, uint32_t(v));
+    }
+
+private:
+    std::vector<uint8_t> structBlock_;
+    std::vector<uint8_t> stringsBlock_;
+    std::map<std::string, uint32_t> stringOffsets_;
+
+    static void pad(std::vector<uint8_t>& buf) {
+        while (buf.size() % 4) buf.push_back(0);
+    }
+
+    uint32_t stringOffset(const std::string& name) {
+        auto [it, inserted] = stringOffsets_.try_emplace(name, static_cast<uint32_t>(stringsBlock_.size()));
+        if (inserted) {
+            stringsBlock_.insert(stringsBlock_.end(), name.begin(), name.end());
+            stringsBlock_.push_back(0);
+        }
+        return it->second;
+    }
+};
+
+std::vector<uint8_t> encodeValue(const PropertyValue& value) {
+    std::vector<uint8_t> out;
+    if (auto* str = std::get_if<std::string>(&value)) {
+        // The empty string represents an empty property (zero length).
+        if (!str->empty()) {
+            out.assign(str->begin(), str->end());
+            out.push_back(0);
+        }
+    } else if (auto* list = std::get_if<StringList>(&value)) {
+        for (const auto& item : *list) {
+            out.insert(out.end(), item.begin(), item.end());
+            out.push_back(0);
+        }
+    } else if (auto* bytes = std::get_if<std::vector<uint8_t>>(&value)) {
+        out = *bytes;
+    } else if (auto* cells = std::get_if<std::vector<uint32_t>>(&value)) {
+        for (auto c : *cells) FdtWriter::be32(out, c);
+    } else if (auto* cells64 = std::get_if<std::vector<uint64_t>>(&value)) {
+        for (auto c : *cells64) FdtWriter::be64(out, c);
+    }
+    return out;
+}
+
+void writeFdtNode(FdtWriter& w, const DeviceTreeNode& node, bool isRoot) {
+    w.beginNode(isRoot ? "" : node.getName());
+    for (const auto& prop : node.getProperties()) {
+        w.property(prop.getName(), encodeValue(prop.getValue()));
+    }
+    for (const auto& child : node.getChildren()) {
+        writeFdtNode(w, *child, false);
+    }
+    w.endNode();
+}
+
+} // namespace
+
+std::vector<uint8_t> DeviceTree::exportAsDTB() const {
+    FdtWriter w;
+    if (root_) {
+        writeFdtNode(w, *root_, true);
+    } else {
+        w.beginNode("");
+        w.endNode();
+    }
+    return w.finish(memoryReservations_, bootCpuId_);
 }
 
 bool DeviceTree::validate() const {
