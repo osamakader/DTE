@@ -44,7 +44,8 @@ namespace DTE {
 // Tree widget item for device tree nodes
 class DeviceTreeWidgetItem : public QTreeWidgetItem {
 public:
-    DeviceTreeWidgetItem(std::shared_ptr<DeviceTreeNode> node, QTreeWidget* parent = nullptr);
+    DeviceTreeWidgetItem(std::shared_ptr<DeviceTreeNode> node, QTreeWidget* parent);
+    DeviceTreeWidgetItem(std::shared_ptr<DeviceTreeNode> node, QTreeWidgetItem* parent);
     
     std::shared_ptr<DeviceTreeNode> getNode() const { return node_; }
     void updateDisplay();
