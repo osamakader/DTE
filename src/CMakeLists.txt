@@ -10,31 +10,27 @@ target_include_directories(dte-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 
-# Source files for Device Tree Explorer GUI
-set(GUI_SOURCES
-    main.cpp
+# GUI widgets as a library so the application and GUI tests share them
+add_library(dte-gui STATIC
     MainWindow.cpp
     DeviceTreeWidgetItem.cpp
     PropertyTableWidget.cpp
     DiffViewerWidget.cpp
-)
-
-# Header files for MOC
-set(GUI_HEADERS
     ../include/MainWindow.h
     ../include/PropertyTableWidget.h
     ../include/DiffViewerWidget.h
 )
 
-# Create the main GUI executable
-add_executable(DeviceTreeExplorer ${GUI_SOURCES} ${GUI_HEADERS})
-
-target_link_libraries(DeviceTreeExplorer
+target_link_libraries(dte-gui PUBLIC
     dte-core
     Qt6::Core
     Qt6::Widgets
     Qt6::Gui
 )
+
+# Main GUI executable
+add_executable(DeviceTreeExplorer main.cpp)
+target_link_libraries(DeviceTreeExplorer dte-gui)
 
 # Set output directory
 set_target_properties(DeviceTreeExplorer PROPERTIES
