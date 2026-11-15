@@ -114,3 +114,16 @@ TEST_F(CLITest, LoadErrorsIncludeReason) {
     EXPECT_NE(r.exitCode, 0);
     EXPECT_NE(r.stderrData.find("Unrecognized file format"), std::string::npos) << r.stderrData;
 }
+
+TEST_F(CLITest, ExportWritesDtsAndDtb) {
+    const std::string dts = (tmp_.path() / "o.dts").string();
+    const std::string dtb = (tmp_.path() / "o.dtb").string();
+    ASSERT_EQ(cli({"export", kData + "/board.dts", "dts", dts}).exitCode, 0);
+    ASSERT_EQ(cli({"export", kData + "/board.dts", "dtb", dtb}).exitCode, 0);
+    EXPECT_EQ(cli({"diff", kData + "/board.dts", dts}).exitCode, 0);
+    EXPECT_EQ(cli({"diff", kData + "/board.dts", dtb}).exitCode, 0);
+
+    auto r = cli({"export", kData + "/board.dts", "xml", dts});
+    EXPECT_NE(r.exitCode, 0);
+    EXPECT_NE(r.stderrData.find("Unsupported format"), std::string::npos);
+}

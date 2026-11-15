@@ -24,7 +24,7 @@ A modern C++ and Qt application for visualizing and editing Device Tree (DTB/DTS
 ### CLI Features
 - Colored output on terminals (plain when piped, or with `--no-color` / `NO_COLOR`)
 - Comprehensive error handling and validation
-- Export to JSON and YAML
+- Export to JSON, YAML, DTS and DTB
 - File conversion between DTB and DTS, including kernel-style sources with `#include`
 - Search and list functionality
 - Progress indicators and detailed feedback
@@ -179,11 +179,14 @@ Export device tree to different formats.
 **Supported formats:**
 - `json` - JSON format for automation
 - `yaml` - YAML format for configuration
+- `dts` - Device Tree Source (built-in writer, no dtc needed)
+- `dtb` - Device Tree Blob (built-in writer, no dtc needed)
 
-Both use the same schema: source file, boot CPU id, memory reservations, and
+JSON and YAML use the same schema: source file, boot CPU id, memory reservations, and
 nodes with `name`, `path`, `properties` and `children`, in tree order. String
 properties become strings, string lists become arrays of strings, and cells and
-bytes become arrays of numbers. Use `convert` to produce DTS or DTB files.
+bytes become arrays of numbers. Exporting a preprocessed source as `dts`
+gives a flat, self-contained file with all `#include`s and macros resolved.
 
 #### `convert <input_file> <output_file>`
 Convert between DTB and DTS formats.

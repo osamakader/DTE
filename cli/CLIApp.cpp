@@ -272,7 +272,10 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "\n" << Colors::BOLD << "Supported formats:" << Colors::RESET << "\n";
         std::cout << "  json    - JSON format\n";
         std::cout << "  yaml    - YAML format\n";
-        std::cout << "\nUse '" << programName_ << " convert' to produce DTS or DTB files.\n";
+        std::cout << "  dts     - Device Tree Source (built-in writer, no dtc needed)\n";
+        std::cout << "  dtb     - Device Tree Blob (built-in writer, no dtc needed)\n";
+        std::cout << "\n'" << programName_ << " convert' instead uses dtc, which keeps dtc's own\n";
+        std::cout << "formatting (labels, value grouping) when decompiling.\n";
     } else if (command == "convert") {
         std::cout << "\nThe input format is detected from the file contents; the output\n";
         std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
@@ -389,31 +392,37 @@ int CLIApp::handleExport(const std::vector<std::string>& args) {
         return EXIT_FAILURE;
     }
     
+    if (format != "json" && format != "yaml" && format != "dts" && format != "dtb") {
+        printError("Unsupported format: " + format);
+        printInfo("Supported formats: json, yaml, dts, dtb");
+        return EXIT_FAILURE;
+    }
+
     printInfo("Loading device tree from: " + inputFile);
     if (!loadDeviceTree(inputFile)) {
         return EXIT_FAILURE;
     }
     
     printInfo("Exporting to " + format + " format: " + outputFile);
-    
-    std::string content;
-    if (format == "json") {
-        content = deviceTree_->exportAsJSON();
-    } else if (format == "yaml") {
-        content = deviceTree_->exportAsYAML();
+
+    if (format == "dts" || format == "dtb") {
+        std::string error;
+        if (!deviceTree_->saveToFile(outputFile, format == "dts", &error)) {
+            printError(error);
+            return EXIT_FAILURE;
+        }
     } else {
-        printError("Unsupported format: " + format);
-        printInfo("Supported formats: json, yaml");
-        return EXIT_FAILURE;
+        std::ofstream outFile(outputFile, std::ios::binary | std::ios::trunc);
+        if (!outFile) {
+            printError("Failed to open output file: " + outputFile);
+            return EXIT_FAILURE;
+        }
+        outFile << (format == "json" ? deviceTree_->exportAsJSON() : deviceTree_->exportAsYAML());
+        if (!outFile.flush()) {
+            printError("Failed to write output file: " + outputFile);
+            return EXIT_FAILURE;
+        }
     }
-    
-    std::ofstream outFile(outputFile);
-    if (!outFile) {
-        printError("Failed to open output file: " + outputFile);
-        return EXIT_FAILURE;
-    }
-    
-    outFile << content;
     printSuccess("Successfully exported to: " + outputFile);
     
     return EXIT_SUCCESS;
