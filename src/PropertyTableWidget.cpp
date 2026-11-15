@@ -2,6 +2,7 @@
 #include <QHeaderView>
 #include <QTableWidgetItem>
 #include <QMessageBox>
+#include <QSignalBlocker>
 
 namespace DTE {
 
@@ -16,7 +17,9 @@ PropertyTableWidget::PropertyTableWidget(QWidget* parent)
     setAlternatingRowColors(true);
     setSelectionBehavior(QAbstractItemView::SelectRows);
     setSelectionMode(QAbstractItemView::SingleSelection);
-    setEditTriggers(QAbstractItemView::DoubleClicked);
+    // Read-only until property editing is implemented; accepting edits that
+    // are never applied to the tree would be misleading.
+    setEditTriggers(QAbstractItemView::NoEditTriggers);
     
     // Resize columns
     horizontalHeader()->setStretchLastSection(true);
@@ -38,16 +41,18 @@ void PropertyTableWidget::clearNode() {
 }
 
 void PropertyTableWidget::populateTable() {
+    // Filling cells emits itemChanged; those are not user edits.
+    const QSignalBlocker blocker(this);
     setRowCount(0);
     
     if (!currentNode_) {
         return;
     }
     
-    auto properties = currentNode_->getProperties();
-    setRowCount(properties.size());
+    const auto& properties = currentNode_->getProperties();
+    setRowCount(static_cast<int>(properties.size()));
     
-    for (int i = 0; i < properties.size(); ++i) {
+    for (int i = 0; i < static_cast<int>(properties.size()); ++i) {
         const auto& prop = properties[i];
         
         // Property name

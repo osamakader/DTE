@@ -1,4 +1,7 @@
 #include "MainWindow.h"
+#include "DeviceTreeParser.h"
+
+#include <functional>
 #include <QApplication>
 #include <QMenuBar>
 #include <QToolBar>
@@ -295,7 +298,6 @@ void MainWindow::createCentralWidget() {
     treeWidget_ = new QTreeWidget();
     treeWidget_->setHeaderLabel("Device Tree");
     treeWidget_->setAlternatingRowColors(true);
-    treeWidget_->setDragDropMode(QAbstractItemView::InternalMove);
     treeWidget_->setContextMenuPolicy(Qt::CustomContextMenu);
     
     // Create detail tabs
@@ -329,7 +331,8 @@ void MainWindow::createDockWidgets() {
 void MainWindow::openFile() {
     QString fileName = QFileDialog::getOpenFileName(this,
         "Open Device Tree File", "",
-        "Device Tree Files (*.dts *.dtb);;DTS Files (*.dts);;DTB Files (*.dtb);;All Files (*)");
+        "Device Tree Files (*.dts *.dtsi *.dtso *.dtb *.dtbo);;DTS Files (*.dts *.dtsi *.dtso);;"
+        "DTB Files (*.dtb *.dtbo);;All Files (*)");
     
     if (!fileName.isEmpty()) {
         loadDeviceTree(fileName);
@@ -516,24 +519,20 @@ void MainWindow::exportDiff() {
 }
 
 void MainWindow::onTreeItemSelectionChanged() {
-    QList<QTreeWidgetItem*> selectedItems = treeWidget_->selectedItems();
-    if (selectedItems.isEmpty()) {
-        propertyTable_->clearNode();
-        return;
-    }
-    
-    // TODO: Update property table with selected node
-    showInfo("Selection", "Node selection functionality not yet implemented");
+    updatePropertyTable();
 }
 
 void MainWindow::onTreeItemDoubleClicked(QTreeWidgetItem* item, int column) {
-    // TODO: Implement double-click functionality
-    showInfo("Double Click", "Double-click functionality not yet implemented");
+    // Qt already expands/collapses on double-click; nothing extra yet.
+    Q_UNUSED(item);
+    Q_UNUSED(column);
 }
 
 void MainWindow::onPropertyChanged(const QString& propertyName, const QString& newValue) {
-    // TODO: Implement property change handling
-    showInfo("Property Change", "Property change functionality not yet implemented");
+    // TODO: apply edits once property editing is implemented (the table is
+    // read-only until then, so this is not reached from user input).
+    Q_UNUSED(propertyName);
+    Q_UNUSED(newValue);
 }
 
 void MainWindow::about() {
@@ -560,19 +559,43 @@ void MainWindow::showHelp() {
 }
 
 void MainWindow::loadDeviceTree(const QString& filename) {
-    // TODO: Implement device tree loading
+    if (!saveChanges()) {
+        return;
+    }
+
+    auto tree = std::make_shared<DeviceTree>();
+    if (!tree->loadFromFile(filename.toStdString())) {
+        showError("Load Error", "Could not load " + filename + "\n\n" +
+                                    QString::fromStdString(tree->getLoadError()));
+        return;
+    }
+
+    deviceTree_ = tree;
     currentFile_ = filename;
-    updateWindowTitle();
+    setModified(false);
+    updateTreeWidget();
+    updateSourceView();
     updateStatusBar();
-    showInfo("Load", "Device tree loading functionality not yet implemented");
 }
 
 void MainWindow::saveDeviceTree(const QString& filename) {
-    // TODO: Implement device tree saving
+    if (!deviceTree_) {
+        showError("Save Error", "No device tree loaded");
+        return;
+    }
+
+    // Format follows the extension; anything that is not a blob is source.
+    const bool asDTS = !(filename.endsWith(".dtb") || filename.endsWith(".dtbo"));
+    std::string error;
+    if (!deviceTree_->saveToFile(filename.toStdString(), asDTS, &error)) {
+        showError("Save Error", QString::fromStdString(error));
+        return;
+    }
+
     currentFile_ = filename;
+    deviceTree_->setSourceFile(filename.toStdString());
     setModified(false);
-    updateWindowTitle();
-    showInfo("Save", "Device tree saving functionality not yet implemented");
+    updateStatusBar();
 }
 
 void MainWindow::updateWindowTitle() {
@@ -587,23 +610,52 @@ void MainWindow::updateWindowTitle() {
 }
 
 void MainWindow::updateStatusBar() {
-    if (deviceTree_) {
-        statusLabel_->setText("Device tree loaded: " + currentFile_);
-    } else {
+    if (!deviceTree_ || !deviceTree_->getRoot()) {
         statusLabel_->setText("No device tree loaded");
+        return;
     }
+
+    size_t nodes = 0;
+    size_t props = 0;
+    std::function<void(const std::shared_ptr<DeviceTreeNode>&)> count =
+        [&](const std::shared_ptr<DeviceTreeNode>& n) {
+            ++nodes;
+            props += n->getPropertyCount();
+            for (const auto& c : n->getChildren()) count(c);
+        };
+    count(deviceTree_->getRoot());
+
+    const QString name = currentFile_.isEmpty() ? QString("Untitled") : currentFile_;
+    statusLabel_->setText(QString("%1 — %2 nodes, %3 properties").arg(name).arg(nodes).arg(props));
 }
 
 void MainWindow::updateTreeWidget() {
-    // TODO: Implement tree widget update
+    treeWidget_->clear();
+    propertyTable_->clearNode();
+    if (!deviceTree_ || !deviceTree_->getRoot()) {
+        return;
+    }
+
+    auto* rootItem = new DeviceTreeWidgetItem(deviceTree_->getRoot(), treeWidget_);
+    rootItem->setExpanded(true);
+    treeWidget_->setCurrentItem(rootItem);
 }
 
 void MainWindow::updatePropertyTable() {
-    // TODO: Implement property table update
+    auto* item = dynamic_cast<DeviceTreeWidgetItem*>(treeWidget_->currentItem());
+    if (!item || !item->isSelected()) {
+        propertyTable_->clearNode();
+        return;
+    }
+    propertyTable_->setNode(item->getNode());
 }
 
 void MainWindow::updateSourceView() {
-    // TODO: Implement source view update
+    if (!deviceTree_) {
+        sourceView_->clear();
+        return;
+    }
+    sourceView_->setPlainText(QString::fromStdString(deviceTree_->exportAsDTS()));
 }
 
 void MainWindow::setModified(bool modified) {
@@ -707,13 +759,20 @@ void MainWindow::setupDragAndDrop() {
 }
 
 bool MainWindow::canOpenFile(const QString& filename) {
-    return filename.endsWith(".dts") || filename.endsWith(".dtb");
+    return DeviceTreeParserFactory::createParser(filename.toStdString()) != nullptr;
 }
 
 // Missing method implementations
 void MainWindow::newFile() {
-    // TODO: Implement new file functionality
-    showInfo("New File", "New file functionality not yet implemented");
+    if (!saveChanges()) {
+        return;
+    }
+    deviceTree_ = std::make_shared<DeviceTree>();
+    currentFile_.clear();
+    setModified(false);
+    updateTreeWidget();
+    updateSourceView();
+    updateStatusBar();
 }
 
 void MainWindow::openFile(const QString& filename) {

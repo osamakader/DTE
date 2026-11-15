@@ -43,3 +43,14 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(dte-tests)
+
+# Offscreen GUI smoke tests
+add_executable(dte-gui-tests GuiTest.cpp)
+target_link_libraries(dte-gui-tests PRIVATE dte-gui GTest::gtest)
+target_compile_definitions(dte-gui-tests PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+if(DTC_EXECUTABLE)
+    target_compile_definitions(dte-gui-tests PRIVATE DTC_PATH="${DTC_EXECUTABLE}")
+endif()
+gtest_discover_tests(dte-gui-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
