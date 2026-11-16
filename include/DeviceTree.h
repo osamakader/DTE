@@ -102,6 +102,19 @@ struct MemoryReservation {
     bool operator==(const MemoryReservation&) const = default;
 };
 
+// Options for DeviceTree::search
+struct SearchOptions {
+    bool properties = false;     // also match property names and values
+    bool caseSensitive = false;
+};
+
+// One search hit: a node matched by name/path (propertyName empty), or one
+// of its properties matched by name or value.
+struct SearchMatch {
+    std::shared_ptr<DeviceTreeNode> node;
+    std::string propertyName;
+};
+
 // Options for DeviceTree::loadFromFile
 struct LoadOptions {
     // Extra include directories for DTS sources (#include and /include/)
@@ -155,6 +168,11 @@ public:
     std::shared_ptr<DeviceTreeNode> findNodeByPath(const std::string& path) const;
     std::vector<std::shared_ptr<DeviceTreeNode>> findNodesByName(const std::string& name) const;
     std::vector<std::shared_ptr<DeviceTreeNode>> findNodesByPattern(const std::string& pattern) const;
+
+    // Substring search in tree order. A node matches on its name, or on its
+    // full path when the query contains '/'. With options.properties, each
+    // property whose name or DTS-rendered value matches is a separate hit.
+    std::vector<SearchMatch> search(const std::string& query, const SearchOptions& options = {}) const;
 
 private:
     std::shared_ptr<DeviceTreeNode> root_;

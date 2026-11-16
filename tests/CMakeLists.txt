@@ -12,6 +12,7 @@ add_executable(dte-tests
     ExportTest.cpp
     CLITest.cpp
     WriterTest.cpp
+    SearchTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )

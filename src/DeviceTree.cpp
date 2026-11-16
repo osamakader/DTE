@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <fstream>
 #include <map>
+#include <cctype>
+#include <functional>
 
 
 namespace DTE {
@@ -667,6 +669,43 @@ std::vector<std::shared_ptr<DeviceTreeNode>> DeviceTree::findNodesByName(const s
 std::vector<std::shared_ptr<DeviceTreeNode>> DeviceTree::findNodesByPattern(const std::string& pattern) const {
     if (!root_) return {};
     return root_->findNodesByPattern(pattern);
+}
+
+namespace {
+
+std::string lowerAscii(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+} // namespace
+
+std::vector<SearchMatch> DeviceTree::search(const std::string& query, const SearchOptions& options) const {
+    std::vector<SearchMatch> matches;
+    if (!root_ || query.empty()) return matches;
+
+    const std::string needle = options.caseSensitive ? query : lowerAscii(query);
+    const bool matchPath = query.find('/') != std::string::npos;
+    auto contains = [&](const std::string& hay) {
+        return (options.caseSensitive ? hay : lowerAscii(hay)).find(needle) != std::string::npos;
+    };
+
+    std::function<void(const std::shared_ptr<DeviceTreeNode>&)> visit =
+        [&](const std::shared_ptr<DeviceTreeNode>& node) {
+            if (contains(matchPath ? node->getFullPath() : node->getName())) {
+                matches.push_back({node, {}});
+            }
+            if (options.properties) {
+                for (const auto& prop : node->getProperties()) {
+                    if (contains(prop.getName()) || contains(prop.getValueAsString())) {
+                        matches.push_back({node, prop.getName()});
+                    }
+                }
+            }
+            for (const auto& child : node->getChildren()) visit(child);
+        };
+    visit(root_);
+    return matches;
 }
 
 } // namespace DTE 
