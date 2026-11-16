@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <QApplication>
+#include <QFileInfo>
 #include <QToolButton>
 #include <QShortcut>
 #include <QMenuBar>
@@ -76,6 +77,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onTreeItemDoubleClicked);
     connect(propertyTable_, &PropertyTableWidget::propertyChanged,
             this, &MainWindow::onPropertyChanged);
+    connect(diffViewer_, &DiffViewerWidget::entryActivated,
+            this, &MainWindow::onDiffEntryActivated);
 }
 
 MainWindow::~MainWindow() {
@@ -244,6 +247,7 @@ void MainWindow::createMenus() {
     // Tools menu
     QMenu* toolsMenu = menuBar()->addMenu("&Tools");
     toolsMenu->addAction(diffAction_);
+    toolsMenu->addAction("&Export Diff...", this, &MainWindow::exportDiff);
     toolsMenu->addAction(validateAction_);
     
     // Help menu
@@ -287,8 +291,10 @@ void MainWindow::createToolBars() {
 void MainWindow::createStatusBar() {
     statusBar_ = statusBar();
     
+    // Permanent (right-aligned) so temporary showMessage() text on the left
+    // never overlaps it.
     statusLabel_ = new QLabel("Ready");
-    statusBar_->addWidget(statusLabel_);
+    statusBar_->addPermanentWidget(statusLabel_);
     
     progressBar_ = new QProgressBar();
     progressBar_->setVisible(false);
@@ -552,9 +558,13 @@ void MainWindow::findPrevious() {
 }
 
 void MainWindow::openDiffFile() {
+    if (!deviceTree_) {
+        showError("Diff", "Open a device tree first; it is compared with the file you choose next.");
+        return;
+    }
     QString fileName = QFileDialog::getOpenFileName(this,
-        "Open Diff File", "",
-        "Device Tree Files (*.dtb *.dts);;All Files (*)");
+        "Compare With", "",
+        "Device Tree Files (*.dts *.dtsi *.dtso *.dtb *.dtbo);;All Files (*)");
     
     if (!fileName.isEmpty()) {
         openDiffFile(fileName);
@@ -562,18 +572,58 @@ void MainWindow::openDiffFile() {
 }
 
 void MainWindow::openDiffFile(const QString& filename) {
-    // TODO: Implement diff file loading
-    showInfo("Diff", "Diff functionality not yet implemented");
+    if (!deviceTree_) {
+        showError("Diff", "Open a device tree before comparing.");
+        return;
+    }
+
+    auto other = std::make_shared<DeviceTree>();
+    if (!other->loadFromFile(filename.toStdString())) {
+        showError("Diff", "Could not load " + filename + "\n\n" +
+                              QString::fromStdString(other->getLoadError()));
+        return;
+    }
+
+    diffTree_ = other;
+    currentDiffFile_ = filename;
+    currentDiff_ = std::make_unique<DeviceTreeDiff>(deviceTree_, diffTree_);
+    const QString baseName = currentFile_.isEmpty() ? QString("Untitled") : QFileInfo(currentFile_).fileName();
+    diffViewer_->setDiff(*currentDiff_, baseName, QFileInfo(filename).fileName());
+    showDiffView();
+
+    const size_t changes = currentDiff_->getTotalChanges();
+    statusBar()->showMessage(changes == 0 ? QString("No differences with %1").arg(filename)
+                                          : QString("%1 changes compared with %2").arg(changes).arg(filename),
+                             5000);
+}
+
+void MainWindow::clearDiff() {
+    currentDiff_.reset();
+    diffTree_.reset();
+    currentDiffFile_.clear();
+    diffViewer_->clearDiff();
+}
+
+void MainWindow::onDiffEntryActivated(const QString& path, const QString& propertyName) {
+    auto node = deviceTree_ ? deviceTree_->findNodeByPath(path.toStdString()) : nullptr;
+    if (node && selectNode(node, propertyName)) {
+        return;
+    }
+    // Added nodes only exist in the other tree
+    statusBar()->showMessage(QString("%1 only exists in %2").arg(path, QFileInfo(currentDiffFile_).fileName()),
+                             5000);
 }
 
 void MainWindow::saveDiff() {
-    // TODO: Implement save diff functionality
-    showInfo("Save Diff", "Save diff functionality not yet implemented");
+    exportDiff();
 }
 
 void MainWindow::exportDiff() {
-    // TODO: Implement export diff functionality
-    showInfo("Export Diff", "Export diff functionality not yet implemented");
+    if (!diffViewer_->hasDiff()) {
+        showError("Export Diff", "There is no diff to export. Use Tools > Diff first.");
+        return;
+    }
+    diffViewer_->exportDiff();
 }
 
 void MainWindow::onTreeItemSelectionChanged() {
@@ -630,6 +680,7 @@ void MainWindow::loadDeviceTree(const QString& filename) {
 
     deviceTree_ = tree;
     currentFile_ = filename;
+    clearDiff();
     setModified(false);
     updateTreeWidget();
     updateSourceView();
@@ -879,6 +930,7 @@ void MainWindow::newFile() {
     }
     deviceTree_ = std::make_shared<DeviceTree>();
     currentFile_.clear();
+    clearDiff();
     setModified(false);
     updateTreeWidget();
     updateSourceView();

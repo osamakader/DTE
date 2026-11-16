@@ -12,6 +12,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QFile>
+#include "DiffViewerWidget.h"
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTreeWidget>
@@ -190,6 +193,129 @@ TEST_F(GuiTest, FindIsRefreshedWhenAnotherFileIsLoaded) {
     EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc/serial@10000000");
 }
 
+namespace {
+// board.dts with: model changed, cpu@1 removed, a property added to the
+// serial node and a new node under soc.
+QString writeChangedBoard(const QTemporaryDir& dir) {
+    QFile in(kBoard);
+    EXPECT_TRUE(in.open(QIODevice::ReadOnly));
+    QString text = QString::fromUtf8(in.readAll());
+    text.replace("model = \"ACME Widget Board\";", "model = \"ACME Widget Board rev B\";");
+    const int cpu1 = text.indexOf("\t\tcpu@1 {");
+    const int cpu1End = text.indexOf("\t\t};\n", cpu1) + 5;
+    text.remove(cpu1, cpu1End - cpu1);
+    text.replace("\t\t\tstatus = \"okay\";", "\t\t\tstatus = \"okay\";\n\t\t\tcurrent-speed = <115200>;");
+    text.replace("\t\tethernet@20000000 {", "\t\twatchdog@30000000 {\n\t\t\treg = <0x30000000 0x100>;\n\t\t};\n\n\t\tethernet@20000000 {");
+
+    const QString path = dir.filePath("board-b.dts");
+    QFile out(path);
+    EXPECT_TRUE(out.open(QIODevice::WriteOnly));
+    out.write(text.toUtf8());
+    return path;
+}
+
+QStringList column(QTableWidget* t, int col) {
+    QStringList out;
+    for (int r = 0; r < t->rowCount(); ++r) out << (t->item(r, col) ? t->item(r, col)->text() : QString());
+    return out;
+}
+} // namespace
+
+TEST_F(GuiTest, DiffShowsChangesWithValues) {
+    QTemporaryDir dir;
+    window_->loadDeviceTree(kBoard);
+    window_->openDiffFile(writeChangedBoard(dir));
+
+    auto* viewer = window_->findChild<DTE::DiffViewerWidget*>();
+    auto* table = window_->findChild<QTableWidget*>("diffTable");
+    ASSERT_TRUE(viewer && table);
+    EXPECT_TRUE(viewer->hasDiff());
+    EXPECT_EQ(window_->findChild<QTabWidget*>()->currentWidget(), viewer);
+
+    EXPECT_EQ(column(table, 0), (QStringList{"Modified", "Removed node", "Removed", "Removed", "Removed",
+                                             "Removed", "Added", "Added node", "Added"}));
+    EXPECT_EQ(column(table, 1).first(), "/");
+    EXPECT_EQ(column(table, 2).first(), "model");
+    EXPECT_EQ(column(table, 3).first(), "\"ACME Widget Board\"");
+    EXPECT_EQ(column(table, 4).first(), "\"ACME Widget Board rev B\"");
+    EXPECT_EQ(column(table, 1)[6], "/soc/serial@10000000");
+    EXPECT_EQ(column(table, 4)[6], "<0x1c200>");
+
+    EXPECT_EQ(window_->findChild<QLabel*>("diffStats")->text().toStdString(),
+              "Total changes: 9 | Added: 3 | Removed: 5 | Modified: 1");
+    EXPECT_TRUE(window_->findChild<QLabel*>("diffFiles")->text().contains("board-b.dts"));
+}
+
+TEST_F(GuiTest, DiffFilters) {
+    QTemporaryDir dir;
+    window_->loadDeviceTree(kBoard);
+    window_->openDiffFile(writeChangedBoard(dir));
+    auto* table = window_->findChild<QTableWidget*>("diffTable");
+    auto* type = window_->findChild<QComboBox*>("diffTypeFilter");
+    auto* filter = window_->findChild<QLineEdit*>("diffPathFilter");
+
+    type->setCurrentIndex(type->findData(static_cast<int>(DTE::DiffType::Added)));
+    EXPECT_EQ(column(table, 0), (QStringList{"Added", "Added node", "Added"}));
+
+    type->setCurrentIndex(0);
+    filter->setText("speed"); // matches a property name
+    EXPECT_EQ(column(table, 2), (QStringList{"current-speed"}));
+    filter->setText("cpu@1"); // matches a path
+    EXPECT_EQ(table->rowCount(), 5);
+}
+
+TEST_F(GuiTest, DoubleClickingAChangeSelectsItsNode) {
+    QTemporaryDir dir;
+    window_->loadDeviceTree(kBoard);
+    window_->openDiffFile(writeChangedBoard(dir));
+    auto* table = window_->findChild<QTableWidget*>("diffTable");
+
+    // Row 1: removed node /cpus/cpu@1 (exists in the open tree)
+    emit table->cellDoubleClicked(1, 0);
+    ASSERT_TRUE(tree_->currentItem());
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/cpus/cpu@1");
+
+    // Row 0: modified property on the root, selects its row
+    emit table->cellDoubleClicked(0, 0);
+    EXPECT_EQ(tree_->currentItem()->text(0), "/");
+    auto rows = props_->selectionModel()->selectedRows();
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(props_->item(rows[0].row(), 0)->text(), "model");
+
+    // Row 7: added node, only in the other file: selection stays put
+    emit table->cellDoubleClicked(7, 0);
+    EXPECT_EQ(tree_->currentItem()->text(0), "/");
+}
+
+TEST_F(GuiTest, DiffExportAndReset) {
+    QTemporaryDir dir;
+    window_->loadDeviceTree(kBoard);
+    window_->openDiffFile(writeChangedBoard(dir));
+    auto* viewer = window_->findChild<DTE::DiffViewerWidget*>();
+
+    const QString out = dir.filePath("diff.json");
+    QString error;
+    ASSERT_TRUE(viewer->exportDiffTo(out, &error)) << error.toStdString();
+    QFile f(out);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+    EXPECT_TRUE(f.readAll().contains("\"total_changes\": 9"));
+
+    EXPECT_FALSE(viewer->exportDiffTo("/nonexistent/dir/diff.json", &error));
+    EXPECT_FALSE(error.isEmpty());
+
+    // Loading another file discards the diff
+    window_->loadDeviceTree(kBoard);
+    EXPECT_FALSE(viewer->hasDiff());
+    EXPECT_EQ(window_->findChild<QTableWidget*>("diffTable")->rowCount(), 0);
+}
+
+TEST_F(GuiTest, DiffWithIdenticalTree) {
+    window_->loadDeviceTree(kBoard);
+    window_->openDiffFile(kBoard);
+    EXPECT_EQ(window_->findChild<QTableWidget*>("diffTable")->rowCount(), 0);
+    EXPECT_EQ(window_->findChild<QLabel*>("diffStats")->text().toStdString(), "No differences.");
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";
@@ -198,6 +324,9 @@ TEST_F(GuiTest, Screenshot) {
     tree_->expandAll();
     auto* root = tree_->topLevelItem(0);
     tree_->setCurrentItem(findChildItem(findChildItem(root, "soc"), "serial@10000000"));
+    if (const char* other = std::getenv("DTE_GUI_SCREENSHOT_DIFF")) {
+        window_->openDiffFile(other);
+    }
     window_->show();
     QApplication::processEvents();
     EXPECT_TRUE(window_->grab().save(out));

@@ -126,6 +126,7 @@ private slots:
     void onTreeItemSelectionChanged();
     void onTreeItemDoubleClicked(QTreeWidgetItem* item, int column);
     void onPropertyChanged(const QString& propertyName, const QString& newValue);
+    void onDiffEntryActivated(const QString& path, const QString& propertyName);
     void showHelp();
     
 private:
@@ -196,6 +197,7 @@ private:
     void createStatusBar();
     void createCentralWidget();
     void createDockWidgets();
+    void clearDiff();
     
     void saveDeviceTree(const QString& filename);
     void updateWindowTitle();
