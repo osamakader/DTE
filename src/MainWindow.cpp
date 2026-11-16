@@ -1,5 +1,11 @@
 #include "MainWindow.h"
+#include "DeviceTreeParser.h"
+
+#include <functional>
 #include <QApplication>
+#include <QFileInfo>
+#include <QToolButton>
+#include <QShortcut>
 #include <QMenuBar>
 #include <QToolBar>
 #include <QStatusBar>
@@ -45,6 +51,9 @@ MainWindow::MainWindow(QWidget* parent)
     , diffTree_(nullptr)
     , currentDiff_(nullptr)
     , isModified_(false)
+    , findEdit_(nullptr)
+    , findInPropertiesCheck_(nullptr)
+    , findStatusLabel_(nullptr)
     , currentSearchIndex_(-1) {
     
     setWindowTitle("Device Tree Explorer");
@@ -68,6 +77,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onTreeItemDoubleClicked);
     connect(propertyTable_, &PropertyTableWidget::propertyChanged,
             this, &MainWindow::onPropertyChanged);
+    connect(diffViewer_, &DiffViewerWidget::entryActivated,
+            this, &MainWindow::onDiffEntryActivated);
 }
 
 MainWindow::~MainWindow() {
@@ -236,6 +247,7 @@ void MainWindow::createMenus() {
     // Tools menu
     QMenu* toolsMenu = menuBar()->addMenu("&Tools");
     toolsMenu->addAction(diffAction_);
+    toolsMenu->addAction("&Export Diff...", this, &MainWindow::exportDiff);
     toolsMenu->addAction(validateAction_);
     
     // Help menu
@@ -279,8 +291,10 @@ void MainWindow::createToolBars() {
 void MainWindow::createStatusBar() {
     statusBar_ = statusBar();
     
+    // Permanent (right-aligned) so temporary showMessage() text on the left
+    // never overlaps it.
     statusLabel_ = new QLabel("Ready");
-    statusBar_->addWidget(statusLabel_);
+    statusBar_->addPermanentWidget(statusLabel_);
     
     progressBar_ = new QProgressBar();
     progressBar_->setVisible(false);
@@ -295,7 +309,6 @@ void MainWindow::createCentralWidget() {
     treeWidget_ = new QTreeWidget();
     treeWidget_->setHeaderLabel("Device Tree");
     treeWidget_->setAlternatingRowColors(true);
-    treeWidget_->setDragDropMode(QAbstractItemView::InternalMove);
     treeWidget_->setContextMenuPolicy(Qt::CustomContextMenu);
     
     // Create detail tabs
@@ -315,8 +328,16 @@ void MainWindow::createCentralWidget() {
     diffViewer_ = new DiffViewerWidget();
     detailTabs_->addTab(diffViewer_, "Diff");
     
+    // Left pane: find bar above the tree
+    auto* leftPane = new QWidget();
+    auto* leftLayout = new QVBoxLayout(leftPane);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(2);
+    leftLayout->addWidget(createFindBar());
+    leftLayout->addWidget(treeWidget_);
+
     // Add widgets to splitter
-    mainSplitter_->addWidget(treeWidget_);
+    mainSplitter_->addWidget(leftPane);
     mainSplitter_->addWidget(detailTabs_);
     mainSplitter_->setStretchFactor(0, 1);
     mainSplitter_->setStretchFactor(1, 2);
@@ -329,7 +350,8 @@ void MainWindow::createDockWidgets() {
 void MainWindow::openFile() {
     QString fileName = QFileDialog::getOpenFileName(this,
         "Open Device Tree File", "",
-        "Device Tree Files (*.dts *.dtb);;DTS Files (*.dts);;DTB Files (*.dtb);;All Files (*)");
+        "Device Tree Files (*.dts *.dtsi *.dtso *.dtb *.dtbo);;DTS Files (*.dts *.dtsi *.dtso);;"
+        "DTB Files (*.dtb *.dtbo);;All Files (*)");
     
     if (!fileName.isEmpty()) {
         loadDeviceTree(fileName);
@@ -413,10 +435,11 @@ void MainWindow::exportAsDTS() {
         "DTS Files (*.dts);;All Files (*)");
     
     if (!fileName.isEmpty()) {
-        if (deviceTree_->saveToFile(fileName.toStdString(), true)) {
+        std::string error;
+        if (deviceTree_->saveToFile(fileName.toStdString(), true, &error)) {
             showSuccess("Export", "Successfully exported to " + fileName);
         } else {
-            showError("Export Error", "Failed to write file: " + fileName);
+            showError("Export Error", QString::fromStdString(error));
         }
     }
 }
@@ -432,10 +455,11 @@ void MainWindow::exportAsDTB() {
         "DTB Files (*.dtb);;All Files (*)");
     
     if (!fileName.isEmpty()) {
-        if (deviceTree_->saveToFile(fileName.toStdString(), false)) {
+        std::string error;
+        if (deviceTree_->saveToFile(fileName.toStdString(), false, &error)) {
             showSuccess("Export", "Successfully exported to " + fileName);
         } else {
-            showError("Export Error", "Failed to write file: " + fileName);
+            showError("Export Error", QString::fromStdString(error));
         }
     }
 }
@@ -473,25 +497,74 @@ void MainWindow::collapseAll() {
     treeWidget_->collapseAll();
 }
 
+QWidget* MainWindow::createFindBar() {
+    auto* bar = new QWidget();
+    auto* layout = new QHBoxLayout(bar);
+    layout->setContentsMargins(2, 2, 2, 0);
+
+    findEdit_ = new QLineEdit();
+    findEdit_->setObjectName("findEdit");
+    findEdit_->setPlaceholderText("Find node (use / for paths)...");
+    findEdit_->setClearButtonEnabled(true);
+
+    findInPropertiesCheck_ = new QCheckBox("Properties");
+    findInPropertiesCheck_->setObjectName("findInProperties");
+    findInPropertiesCheck_->setToolTip("Also match property names and values");
+
+    auto* prevButton = new QToolButton();
+    prevButton->setArrowType(Qt::UpArrow);
+    prevButton->setToolTip("Previous match (Shift+Enter, Shift+F3)");
+    auto* nextButton = new QToolButton();
+    nextButton->setArrowType(Qt::DownArrow);
+    nextButton->setToolTip("Next match (Enter, F3)");
+
+    findStatusLabel_ = new QLabel();
+    findStatusLabel_->setObjectName("findStatus");
+
+    layout->addWidget(findEdit_, 1);
+    layout->addWidget(findInPropertiesCheck_);
+    layout->addWidget(prevButton);
+    layout->addWidget(nextButton);
+    layout->addWidget(findStatusLabel_);
+
+    connect(findEdit_, &QLineEdit::textChanged, this, &MainWindow::performSearch);
+    connect(findInPropertiesCheck_, &QCheckBox::toggled, this, &MainWindow::performSearch);
+    connect(findEdit_, &QLineEdit::returnPressed, this, &MainWindow::findNext);
+    auto* shiftEnter = new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_Return), findEdit_);
+    shiftEnter->setContext(Qt::WidgetShortcut);
+    connect(shiftEnter, &QShortcut::activated, this, &MainWindow::findPrevious);
+    connect(prevButton, &QToolButton::clicked, this, &MainWindow::findPrevious);
+    connect(nextButton, &QToolButton::clicked, this, &MainWindow::findNext);
+
+    return bar;
+}
+
 void MainWindow::findNode() {
-    // TODO: Implement find functionality
-    showInfo("Find", "Find functionality not yet implemented");
+    findEdit_->setFocus();
+    findEdit_->selectAll();
 }
 
 void MainWindow::findNext() {
-    // TODO: Implement find next functionality
-    showInfo("Find Next", "Find next functionality not yet implemented");
+    if (searchMatches_.empty()) return;
+    currentSearchIndex_ = (currentSearchIndex_ + 1) % static_cast<int>(searchMatches_.size());
+    highlightSearchResult();
 }
 
 void MainWindow::findPrevious() {
-    // TODO: Implement find previous functionality
-    showInfo("Find Previous", "Find previous functionality not yet implemented");
+    if (searchMatches_.empty()) return;
+    const int n = static_cast<int>(searchMatches_.size());
+    currentSearchIndex_ = (currentSearchIndex_ - 1 + n) % n;
+    highlightSearchResult();
 }
 
 void MainWindow::openDiffFile() {
+    if (!deviceTree_) {
+        showError("Diff", "Open a device tree first; it is compared with the file you choose next.");
+        return;
+    }
     QString fileName = QFileDialog::getOpenFileName(this,
-        "Open Diff File", "",
-        "Device Tree Files (*.dtb *.dts);;All Files (*)");
+        "Compare With", "",
+        "Device Tree Files (*.dts *.dtsi *.dtso *.dtb *.dtbo);;All Files (*)");
     
     if (!fileName.isEmpty()) {
         openDiffFile(fileName);
@@ -499,39 +572,75 @@ void MainWindow::openDiffFile() {
 }
 
 void MainWindow::openDiffFile(const QString& filename) {
-    // TODO: Implement diff file loading
-    showInfo("Diff", "Diff functionality not yet implemented");
+    if (!deviceTree_) {
+        showError("Diff", "Open a device tree before comparing.");
+        return;
+    }
+
+    auto other = std::make_shared<DeviceTree>();
+    if (!other->loadFromFile(filename.toStdString())) {
+        showError("Diff", "Could not load " + filename + "\n\n" +
+                              QString::fromStdString(other->getLoadError()));
+        return;
+    }
+
+    diffTree_ = other;
+    currentDiffFile_ = filename;
+    currentDiff_ = std::make_unique<DeviceTreeDiff>(deviceTree_, diffTree_);
+    const QString baseName = currentFile_.isEmpty() ? QString("Untitled") : QFileInfo(currentFile_).fileName();
+    diffViewer_->setDiff(*currentDiff_, baseName, QFileInfo(filename).fileName());
+    showDiffView();
+
+    const size_t changes = currentDiff_->getTotalChanges();
+    statusBar()->showMessage(changes == 0 ? QString("No differences with %1").arg(filename)
+                                          : QString("%1 changes compared with %2").arg(changes).arg(filename),
+                             5000);
+}
+
+void MainWindow::clearDiff() {
+    currentDiff_.reset();
+    diffTree_.reset();
+    currentDiffFile_.clear();
+    diffViewer_->clearDiff();
+}
+
+void MainWindow::onDiffEntryActivated(const QString& path, const QString& propertyName) {
+    auto node = deviceTree_ ? deviceTree_->findNodeByPath(path.toStdString()) : nullptr;
+    if (node && selectNode(node, propertyName)) {
+        return;
+    }
+    // Added nodes only exist in the other tree
+    statusBar()->showMessage(QString("%1 only exists in %2").arg(path, QFileInfo(currentDiffFile_).fileName()),
+                             5000);
 }
 
 void MainWindow::saveDiff() {
-    // TODO: Implement save diff functionality
-    showInfo("Save Diff", "Save diff functionality not yet implemented");
+    exportDiff();
 }
 
 void MainWindow::exportDiff() {
-    // TODO: Implement export diff functionality
-    showInfo("Export Diff", "Export diff functionality not yet implemented");
+    if (!diffViewer_->hasDiff()) {
+        showError("Export Diff", "There is no diff to export. Use Tools > Diff first.");
+        return;
+    }
+    diffViewer_->exportDiff();
 }
 
 void MainWindow::onTreeItemSelectionChanged() {
-    QList<QTreeWidgetItem*> selectedItems = treeWidget_->selectedItems();
-    if (selectedItems.isEmpty()) {
-        propertyTable_->clearNode();
-        return;
-    }
-    
-    // TODO: Update property table with selected node
-    showInfo("Selection", "Node selection functionality not yet implemented");
+    updatePropertyTable();
 }
 
 void MainWindow::onTreeItemDoubleClicked(QTreeWidgetItem* item, int column) {
-    // TODO: Implement double-click functionality
-    showInfo("Double Click", "Double-click functionality not yet implemented");
+    // Qt already expands/collapses on double-click; nothing extra yet.
+    Q_UNUSED(item);
+    Q_UNUSED(column);
 }
 
 void MainWindow::onPropertyChanged(const QString& propertyName, const QString& newValue) {
-    // TODO: Implement property change handling
-    showInfo("Property Change", "Property change functionality not yet implemented");
+    // TODO: apply edits once property editing is implemented (the table is
+    // read-only until then, so this is not reached from user input).
+    Q_UNUSED(propertyName);
+    Q_UNUSED(newValue);
 }
 
 void MainWindow::about() {
@@ -558,19 +667,44 @@ void MainWindow::showHelp() {
 }
 
 void MainWindow::loadDeviceTree(const QString& filename) {
-    // TODO: Implement device tree loading
+    if (!saveChanges()) {
+        return;
+    }
+
+    auto tree = std::make_shared<DeviceTree>();
+    if (!tree->loadFromFile(filename.toStdString())) {
+        showError("Load Error", "Could not load " + filename + "\n\n" +
+                                    QString::fromStdString(tree->getLoadError()));
+        return;
+    }
+
+    deviceTree_ = tree;
     currentFile_ = filename;
-    updateWindowTitle();
+    clearDiff();
+    setModified(false);
+    updateTreeWidget();
+    updateSourceView();
     updateStatusBar();
-    showInfo("Load", "Device tree loading functionality not yet implemented");
 }
 
 void MainWindow::saveDeviceTree(const QString& filename) {
-    // TODO: Implement device tree saving
+    if (!deviceTree_) {
+        showError("Save Error", "No device tree loaded");
+        return;
+    }
+
+    // Format follows the extension; anything that is not a blob is source.
+    const bool asDTS = !(filename.endsWith(".dtb") || filename.endsWith(".dtbo"));
+    std::string error;
+    if (!deviceTree_->saveToFile(filename.toStdString(), asDTS, &error)) {
+        showError("Save Error", QString::fromStdString(error));
+        return;
+    }
+
     currentFile_ = filename;
+    deviceTree_->setSourceFile(filename.toStdString());
     setModified(false);
-    updateWindowTitle();
-    showInfo("Save", "Device tree saving functionality not yet implemented");
+    updateStatusBar();
 }
 
 void MainWindow::updateWindowTitle() {
@@ -585,23 +719,63 @@ void MainWindow::updateWindowTitle() {
 }
 
 void MainWindow::updateStatusBar() {
-    if (deviceTree_) {
-        statusLabel_->setText("Device tree loaded: " + currentFile_);
-    } else {
+    if (!deviceTree_ || !deviceTree_->getRoot()) {
         statusLabel_->setText("No device tree loaded");
+        return;
     }
+
+    size_t nodes = 0;
+    size_t props = 0;
+    std::function<void(const std::shared_ptr<DeviceTreeNode>&)> count =
+        [&](const std::shared_ptr<DeviceTreeNode>& n) {
+            ++nodes;
+            props += n->getPropertyCount();
+            for (const auto& c : n->getChildren()) count(c);
+        };
+    count(deviceTree_->getRoot());
+
+    const QString name = currentFile_.isEmpty() ? QString("Untitled") : currentFile_;
+    statusLabel_->setText(QString("%1 — %2 nodes, %3 properties").arg(name).arg(nodes).arg(props));
 }
 
 void MainWindow::updateTreeWidget() {
-    // TODO: Implement tree widget update
+    treeWidget_->clear();
+    nodeItems_.clear();
+    propertyTable_->clearNode();
+    if (!deviceTree_ || !deviceTree_->getRoot()) {
+        performSearch();
+        return;
+    }
+
+    auto* rootItem = new DeviceTreeWidgetItem(deviceTree_->getRoot(), treeWidget_);
+    std::function<void(QTreeWidgetItem*)> index = [&](QTreeWidgetItem* item) {
+        if (auto* dtItem = dynamic_cast<DeviceTreeWidgetItem*>(item)) {
+            nodeItems_.insert(dtItem->getNode().get(), item);
+        }
+        for (int i = 0; i < item->childCount(); ++i) index(item->child(i));
+    };
+    index(rootItem);
+
+    rootItem->setExpanded(true);
+    treeWidget_->setCurrentItem(rootItem);
+    performSearch(); // refresh matches for the new tree
 }
 
 void MainWindow::updatePropertyTable() {
-    // TODO: Implement property table update
+    auto* item = dynamic_cast<DeviceTreeWidgetItem*>(treeWidget_->currentItem());
+    if (!item || !item->isSelected()) {
+        propertyTable_->clearNode();
+        return;
+    }
+    propertyTable_->setNode(item->getNode());
 }
 
 void MainWindow::updateSourceView() {
-    // TODO: Implement source view update
+    if (!deviceTree_) {
+        sourceView_->clear();
+        return;
+    }
+    sourceView_->setPlainText(QString::fromStdString(deviceTree_->exportAsDTS()));
 }
 
 void MainWindow::setModified(bool modified) {
@@ -630,11 +804,52 @@ bool MainWindow::saveChanges() {
 }
 
 void MainWindow::performSearch() {
-    // TODO: Implement search functionality
+    searchMatches_.clear();
+    currentSearchIndex_ = -1;
+
+    const QString query = findEdit_->text();
+    if (query.isEmpty() || !deviceTree_) {
+        findStatusLabel_->clear();
+        return;
+    }
+
+    SearchOptions options;
+    options.properties = findInPropertiesCheck_->isChecked();
+    searchMatches_ = deviceTree_->search(query.toStdString(), options);
+
+    if (searchMatches_.empty()) {
+        findStatusLabel_->setText("No matches");
+        return;
+    }
+    // Jump to the first match as the user types
+    currentSearchIndex_ = 0;
+    highlightSearchResult();
 }
 
 void MainWindow::highlightSearchResult() {
-    // TODO: Implement search result highlighting
+    if (currentSearchIndex_ < 0 || currentSearchIndex_ >= static_cast<int>(searchMatches_.size())) {
+        return;
+    }
+    const auto& match = searchMatches_[currentSearchIndex_];
+    selectNode(match.node, QString::fromStdString(match.propertyName));
+    findStatusLabel_->setText(QString("%1 of %2").arg(currentSearchIndex_ + 1).arg(searchMatches_.size()));
+}
+
+bool MainWindow::selectNode(const std::shared_ptr<DeviceTreeNode>& node, const QString& propertyName) {
+    auto* item = node ? nodeItems_.value(node.get(), nullptr) : nullptr;
+    if (!item) {
+        return false;
+    }
+    for (auto* p = item->parent(); p; p = p->parent()) {
+        p->setExpanded(true);
+    }
+    treeWidget_->setCurrentItem(item);
+    treeWidget_->scrollToItem(item);
+    if (!propertyName.isEmpty()) {
+        detailTabs_->setCurrentWidget(propertyTable_);
+        propertyTable_->selectProperty(propertyName);
+    }
+    return true;
 }
 
 void MainWindow::loadSettings() {
@@ -705,13 +920,21 @@ void MainWindow::setupDragAndDrop() {
 }
 
 bool MainWindow::canOpenFile(const QString& filename) {
-    return filename.endsWith(".dts") || filename.endsWith(".dtb");
+    return DeviceTreeParserFactory::createParser(filename.toStdString()) != nullptr;
 }
 
 // Missing method implementations
 void MainWindow::newFile() {
-    // TODO: Implement new file functionality
-    showInfo("New File", "New file functionality not yet implemented");
+    if (!saveChanges()) {
+        return;
+    }
+    deviceTree_ = std::make_shared<DeviceTree>();
+    currentFile_.clear();
+    clearDiff();
+    setModified(false);
+    updateTreeWidget();
+    updateSourceView();
+    updateStatusBar();
 }
 
 void MainWindow::openFile(const QString& filename) {
@@ -719,28 +942,24 @@ void MainWindow::openFile(const QString& filename) {
 }
 
 void MainWindow::findProperty() {
-    // TODO: Implement find property functionality
-    showInfo("Find Property", "Find property functionality not yet implemented");
+    findInPropertiesCheck_->setChecked(true);
+    findNode();
 }
 
 void MainWindow::showTreeView() {
-    // TODO: Implement show tree view functionality
-    showInfo("Tree View", "Tree view functionality not yet implemented");
+    treeWidget_->setFocus();
 }
 
 void MainWindow::showPropertyView() {
-    // TODO: Implement show property view functionality
-    showInfo("Property View", "Property view functionality not yet implemented");
+    detailTabs_->setCurrentWidget(propertyTable_);
 }
 
 void MainWindow::showSourceView() {
-    // TODO: Implement show source view functionality
-    showInfo("Source View", "Source view functionality not yet implemented");
+    detailTabs_->setCurrentWidget(sourceView_);
 }
 
 void MainWindow::showDiffView() {
-    // TODO: Implement show diff view functionality
-    showInfo("Diff View", "Diff view functionality not yet implemented");
+    detailTabs_->setCurrentWidget(diffViewer_);
 }
 
 } // namespace DTE 

@@ -8,30 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find Qt6 components
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
 
-# Find JSON and YAML libraries
+# JSON and YAML libraries are optional and only used by the tests to check
+# that exported documents parse; the application has built-in writers.
 find_package(nlohmann_json 3.2.0 QUIET)
-if(nlohmann_json_FOUND)
-    message(STATUS "Found nlohmann/json: ${nlohmann_json_VERSION}")
-    add_definitions(-DHAVE_NLOHMANN_JSON)
-else()
-    message(WARNING "nlohmann/json not found - will use custom JSON implementation")
-endif()
-
 find_package(yaml-cpp QUIET)
-if(yaml-cpp_FOUND)
-    message(STATUS "Found yaml-cpp: ${yaml-cpp_VERSION}")
-    add_definitions(-DHAVE_YAML_CPP)
-else()
-    message(WARNING "yaml-cpp not found - will use custom YAML implementation")
-endif()
 
 # Find dtc binary (Device Tree Compiler)
 find_program(DTC_EXECUTABLE dtc)
 if(DTC_EXECUTABLE)
     message(STATUS "Found dtc: ${DTC_EXECUTABLE}")
-    add_definitions(-DHAVE_DTC)
 else()
-    message(WARNING "dtc not found - some features will be limited")
+    message(WARNING "dtc not found - DTS loading and conversion need it at runtime")
     message(STATUS "Install device-tree-compiler package for full functionality")
 endif()
 

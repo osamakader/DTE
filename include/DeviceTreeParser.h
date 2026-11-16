@@ -13,6 +13,12 @@ public:
     virtual ~DeviceTreeParser() = default;
     virtual std::shared_ptr<DeviceTree> parse(const std::string& filename) = 0;
     virtual bool canParse(const std::string& filename) const = 0;
+
+    // Reason for the last parse failure (empty after a successful parse).
+    const std::string& lastError() const { return lastError_; }
+
+protected:
+    std::string lastError_;
 };
 
 // DTB (Flattened Device Tree blob) parser.
@@ -31,24 +37,41 @@ public:
     std::shared_ptr<DeviceTree> parseBuffer(const std::vector<uint8_t>& blob) {
         return parseBuffer(blob.data(), blob.size());
     }
-
-    const std::string& lastError() const { return lastError_; }
-
-private:
-    std::string lastError_;
 };
 
-// DTS (Device Tree Source) parser
+// DTS (Device Tree Source) parser.
+//
+// Compiles the source with dtc and parses the resulting blob with
+// DTBParser, so the full DTS language is supported (labels, references,
+// /include/, /memreserve/, overrides, /delete-node/, expressions, ...)
+// and a DTS file loads exactly like its compiled DTB. Files that use C
+// preprocessor directives are run through cpp first, as the Linux kernel
+// build does.
 class DTSParser : public DeviceTreeParser {
 public:
     std::shared_ptr<DeviceTree> parse(const std::string& filename) override;
     bool canParse(const std::string& filename) const override;
 
+    // Compiles the source to a DTB blob without parsing it (used for
+    // conversion). Returns false and sets lastError() on failure.
+    bool compile(const std::string& filename, std::string& blob);
+
+    // Warnings dtc printed during the last successful parse.
+    const std::string& lastWarnings() const { return lastWarnings_; }
+
+    // Extra directories searched by #include (C preprocessor) and
+    // /include/ (dtc). The source file's directory and its include/
+    // subdirectory are always searched first.
+    void setIncludePaths(std::vector<std::string> paths) { includePaths_ = std::move(paths); }
+    const std::vector<std::string>& includePaths() const { return includePaths_; }
+
+    // True if the file uses C preprocessor directives (#include, #define,
+    // #if...) and so must go through cpp before dtc.
+    static bool needsPreprocessing(const std::string& filename);
+
 private:
-    bool parseDTSFile(const std::string& filename, std::shared_ptr<DeviceTree> tree);
-    std::shared_ptr<DeviceTreeNode> parseDTSNode(std::istream& stream, std::string& line);
-    DeviceTreeProperty parseDTSProperty(std::istream& stream, std::string& line);
-    std::string parseDTSValue(std::istream& stream, std::string& line);
+    std::string lastWarnings_;
+    std::vector<std::string> includePaths_;
 };
 
 // Parser factory
@@ -58,13 +81,17 @@ public:
     static std::vector<std::unique_ptr<DeviceTreeParser>> getAllParsers();
 };
 
-// Utility functions for device tree operations
+// Utility functions for device tree operations. On failure they return
+// false and, if `error` is given, store the reason there.
 namespace DeviceTreeUtils {
-    bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile);
-    bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile);
-    bool validateDeviceTree(const std::string& filename);
+    bool dtbToDts(const std::string& dtbFile, const std::string& dtsFile, std::string* error = nullptr);
+    // Compiles like DTSParser (C preprocessing when needed, include paths).
+    bool dtsToDtb(const std::string& dtsFile, const std::string& dtbFile,
+                  const std::vector<std::string>& includePaths = {}, std::string* error = nullptr);
+    bool validateDeviceTree(const std::string& filename, std::string* error = nullptr);
     std::string getDeviceTreeInfo(const std::string& filename);
-    bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile);
+    bool extractFromKernel(const std::string& kernelFile, const std::string& outputFile,
+                           std::string* error = nullptr);
 }
 
 } // namespace DTE

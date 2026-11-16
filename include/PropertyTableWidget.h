@@ -14,6 +14,8 @@ public:
     PropertyTableWidget(QWidget* parent = nullptr);
     void setNode(std::shared_ptr<DeviceTreeNode> node);
     void clearNode();
+    // Selects and scrolls to the row of the named property, if present.
+    bool selectProperty(const QString& name);
     
 signals:
     void propertyChanged(const QString& propertyName, const QString& newValue);

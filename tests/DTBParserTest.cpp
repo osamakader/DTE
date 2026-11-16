@@ -136,12 +136,21 @@ TEST(DTBParser, DecodesStringProperty) {
     EXPECT_EQ(model.getValueAsString(), "\"Test Board\"");
 }
 
-TEST(DTBParser, DecodesStringListLikeDtsSource) {
+TEST(DTBParser, DecodesStringList) {
     auto tree = parseOk(sampleTree().build());
     ASSERT_TRUE(tree);
     const auto compat = prop(tree, "/", "compatible");
-    ASSERT_TRUE(compat.isString());
+    ASSERT_TRUE(compat.isStringList());
+    EXPECT_EQ(compat.getValueAsStrings(), (DTE::StringList{"vendor,board", "vendor,soc"}));
     EXPECT_EQ(compat.getValueAsString(), "\"vendor,board\", \"vendor,soc\"");
+}
+
+TEST(DTBParser, StringListMembersMayContainCommaAndQuotes) {
+    FdtBuilder b;
+    b.beginNode("").propString("x", {"a\", \"b", "c"}).endNode().end();
+    auto tree = parseOk(b.build());
+    ASSERT_TRUE(tree);
+    EXPECT_EQ(prop(tree, "/", "x").getValueAsStrings(), (DTE::StringList{"a\", \"b", "c"}));
 }
 
 TEST(DTBParser, DecodesCellsBigEndian) {

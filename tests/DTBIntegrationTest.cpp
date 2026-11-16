@@ -3,7 +3,7 @@
 
 #include "DeviceTree.h"
 #include "DeviceTreeParser.h"
-#include "FdtBuilder.h"
+#include "TestUtil.h"
 
 #include <gtest/gtest.h>
 
@@ -19,25 +19,10 @@ using DTE::DeviceTreeNode;
 using DTE::DeviceTreeParserFactory;
 using DTE::DTBParser;
 using DTE::MemoryReservation;
+using DTE::test::countNodes;
+using DTE::test::TempDir;
 
 namespace {
-
-class TempDir {
-public:
-    TempDir() {
-        std::string tmpl = (fs::temp_directory_path() / "dte-test-XXXXXX").string();
-        if (!mkdtemp(tmpl.data())) throw std::runtime_error("mkdtemp failed");
-        path_ = tmpl;
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path_, ec);
-    }
-    const fs::path& path() const { return path_; }
-
-private:
-    fs::path path_;
-};
 
 #ifdef DTC_PATH
 // Runs dtc without a shell. Returns true on success.
@@ -84,12 +69,6 @@ std::string str(const DeviceTree& tree, const std::string& path, const std::stri
     if (!node) return "<no node>";
     const auto* p = static_cast<const DeviceTreeNode&>(*node).findProperty(name);
     return p ? p->getValueAsString() : "<no property>";
-}
-
-size_t countNodes(const std::shared_ptr<DeviceTreeNode>& n) {
-    size_t count = 1;
-    for (const auto& c : n->getChildren()) count += countNodes(c);
-    return count;
 }
 
 } // namespace
@@ -184,4 +163,28 @@ TEST(DTBFile, CorruptDtbExtensionStillRoutedToDtbParser) {
 TEST(DTBFile, DtsFileIsNotClaimedByDtbParser) {
     DTBParser parser;
     EXPECT_FALSE(parser.canParse(std::string(TEST_DATA_DIR) + "/board.dts"));
+}
+
+TEST(DeviceTreeLoad, ReportsMissingFile) {
+    DeviceTree tree;
+    EXPECT_FALSE(tree.loadFromFile("/nonexistent/x.dtb"));
+    EXPECT_NE(tree.getLoadError().find("Cannot open file"), std::string::npos) << tree.getLoadError();
+}
+
+TEST(DeviceTreeLoad, ReportsUnrecognizedFormat) {
+    TempDir tmp;
+    auto file = tmp.write("notes.txt", "hello");
+    DeviceTree tree;
+    EXPECT_FALSE(tree.loadFromFile(file));
+    EXPECT_NE(tree.getLoadError().find("Unrecognized file format"), std::string::npos) << tree.getLoadError();
+}
+
+TEST(DeviceTreeLoad, ReportsParserErrorAndKeepsPreviousTree) {
+    TempDir tmp;
+    auto file = tmp.write("bad.dtb", std::string(64, '\0'));
+    DeviceTree tree;
+    auto before = tree.getRoot();
+    EXPECT_FALSE(tree.loadFromFile(file));
+    EXPECT_NE(tree.getLoadError().find("magic"), std::string::npos) << tree.getLoadError();
+    EXPECT_EQ(tree.getRoot(), before);
 }

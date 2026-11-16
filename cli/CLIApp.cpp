@@ -6,38 +6,38 @@
 #include <sstream>
 #include <cstdlib>
 #include <cstring>
-#include <sys/ioctl.h>
 #include <functional>
 #include <unistd.h>
 
 namespace DTE {
 
-// ANSI color codes for better output
+// ANSI color codes. Cleared by disableColors() when output is not a
+// terminal or NO_COLOR is set (https://no-color.org).
 namespace Colors {
-    const std::string RESET = "\033[0m";
-    const std::string RED = "\033[31m";
-    const std::string GREEN = "\033[32m";
-    const std::string YELLOW = "\033[33m";
-    const std::string BLUE = "\033[34m";
-    const std::string MAGENTA = "\033[35m";
-    const std::string CYAN = "\033[36m";
-    const std::string WHITE = "\033[37m";
-    const std::string BOLD = "\033[1m";
-    const std::string UNDERLINE = "\033[4m";
+    std::string RESET = "\033[0m";
+    std::string RED = "\033[31m";
+    std::string GREEN = "\033[32m";
+    std::string YELLOW = "\033[33m";
+    std::string BLUE = "\033[34m";
+    std::string MAGENTA = "\033[35m";
+    std::string CYAN = "\033[36m";
+    std::string WHITE = "\033[37m";
+    std::string BOLD = "\033[1m";
+    std::string UNDERLINE = "\033[4m";
+
+    void disableColors() {
+        for (auto* c : {&RESET, &RED, &GREEN, &YELLOW, &BLUE, &MAGENTA, &CYAN, &WHITE, &BOLD, &UNDERLINE}) {
+            c->clear();
+        }
+    }
 }
 
 // Utility functions
 namespace {
-    bool isTerminal() {
-        return isatty(STDOUT_FILENO);
-    }
-    
-    int getTerminalWidth() {
-        struct winsize w;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) {
-            return w.ws_col;
-        }
-        return 80; // Default width
+    bool shouldUseColor() {
+        const char* noColor = std::getenv("NO_COLOR");
+        if (noColor && *noColor) return false;
+        return isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     }
     
     std::string formatBytes(size_t bytes) {
@@ -77,10 +77,46 @@ CLIApp::CLIApp(int argc, char* argv[])
         args_.push_back(argv[i]);
     }
     
+    if (!shouldUseColor()) {
+        Colors::disableColors();
+    }
+
     setupCommands();
 }
 
+bool CLIApp::parseGlobalOptions() {
+    std::vector<std::string> rest;
+    for (size_t i = 0; i < args_.size(); ++i) {
+        const std::string& a = args_[i];
+        if (a == "--") {
+            rest.insert(rest.end(), args_.begin() + i + 1, args_.end());
+            break;
+        }
+        if (a == "-I" || a == "--include") {
+            if (i + 1 >= args_.size()) {
+                printError("Option " + a + " requires a directory argument");
+                return false;
+            }
+            includePaths_.push_back(args_[++i]);
+        } else if (a.rfind("--include=", 0) == 0) {
+            includePaths_.push_back(a.substr(10));
+        } else if (a.size() > 2 && a.rfind("-I", 0) == 0) {
+            includePaths_.push_back(a.substr(2));
+        } else if (a == "--no-color") {
+            Colors::disableColors();
+        } else {
+            rest.push_back(a);
+        }
+    }
+    args_ = std::move(rest);
+    return true;
+}
+
 int CLIApp::run() {
+    if (!parseGlobalOptions()) {
+        return EXIT_FAILURE;
+    }
+
     if (args_.empty()) {
         printUsage();
         return EXIT_FAILURE;
@@ -178,7 +214,7 @@ void CLIApp::setupCommands() {
 
 void CLIApp::printUsage() const {
     std::cout << Colors::BOLD << "Device Tree Explorer CLI" << Colors::RESET << "\n\n";
-    std::cout << "Usage: " << programName_ << " <command> [options]\n\n";
+    std::cout << "Usage: " << programName_ << " [global options] <command> [arguments]\n\n";
     std::cout << Colors::BOLD << "Available commands:" << Colors::RESET << "\n";
     
     int maxWidth = 0;
@@ -191,6 +227,9 @@ void CLIApp::printUsage() const {
                   << " " << cmd.second.description << "\n";
     }
     
+    std::cout << "\n" << Colors::BOLD << "Global options:" << Colors::RESET << "\n";
+    std::cout << "  -I, --include DIR  Add an include directory for DTS sources (repeatable)\n";
+    std::cout << "  --no-color         Disable colored output (also: NO_COLOR=1)\n";
     std::cout << "\nUse '" << programName_ << " help <command>' for detailed help.\n";
     std::cout << "Use '" << programName_ << " --version' to show version information.\n";
 }
@@ -222,17 +261,27 @@ void CLIApp::printHelp(const std::string& command) const {
     if (command == "info") {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " info device.dtb\n";
-        std::cout << "  " << programName_ << " info /proc/device-tree\n";
+        std::cout << "  " << programName_ << " -I include info board.dts\n";
     } else if (command == "diff") {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " diff base.dtb overlay.dtb\n";
         std::cout << "  " << programName_ << " diff original.dts modified.dts\n";
+        std::cout << "\n" << Colors::BOLD << "Exit status:" << Colors::RESET << "\n";
+        std::cout << "  0 if the trees are identical, 1 if they differ, 2 on error\n";
     } else if (command == "export") {
         std::cout << "\n" << Colors::BOLD << "Supported formats:" << Colors::RESET << "\n";
         std::cout << "  json    - JSON format\n";
         std::cout << "  yaml    - YAML format\n";
-        std::cout << "  dts     - Device Tree Source format\n";
-        std::cout << "  dtb     - Device Tree Blob format\n";
+        std::cout << "  dts     - Device Tree Source (built-in writer, no dtc needed)\n";
+        std::cout << "  dtb     - Device Tree Blob (built-in writer, no dtc needed)\n";
+        std::cout << "\n'" << programName_ << " convert' instead uses dtc, which keeps dtc's own\n";
+        std::cout << "formatting (labels, value grouping) when decompiling.\n";
+    } else if (command == "convert") {
+        std::cout << "\nThe input format is detected from the file contents; the output\n";
+        std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
+        std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
+        std::cout << "  " << programName_ << " convert board.dtb board.dts\n";
+        std::cout << "  " << programName_ << " -I include convert board.dts board.dtb\n";
     }
 }
 
@@ -283,10 +332,15 @@ int CLIApp::handleValidate(const std::vector<std::string>& args) {
     return deviceTree_->validate() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+// Exit status follows diff(1): 0 = identical, 1 = different, 2 = error.
+constexpr int DIFF_EXIT_SAME = 0;
+constexpr int DIFF_EXIT_DIFFERENT = 1;
+constexpr int DIFF_EXIT_ERROR = 2;
+
 int CLIApp::handleDiff(const std::vector<std::string>& args) {
     if (args.size() != 2) {
         printError("Usage: " + commands_["diff"].usage);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     std::string baseFile = args[0];
@@ -294,33 +348,33 @@ int CLIApp::handleDiff(const std::vector<std::string>& args) {
     
     if (!fileExists(baseFile)) {
         printError("Base file not found: " + baseFile);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     if (!fileExists(overlayFile)) {
         printError("Overlay file not found: " + overlayFile);
-        return EXIT_FAILURE;
+        return DIFF_EXIT_ERROR;
     }
     
     printInfo("Loading base device tree: " + baseFile);
     auto baseTree = std::make_shared<DeviceTree>();
-    if (!baseTree->loadFromFile(baseFile)) {
-        printError("Failed to load base file: " + baseFile);
-        return EXIT_FAILURE;
+    if (!baseTree->loadFromFile(baseFile, loadOptions())) {
+        printError("Failed to load base file: " + baseFile + "\n" + baseTree->getLoadError());
+        return DIFF_EXIT_ERROR;
     }
     
     printInfo("Loading overlay device tree: " + overlayFile);
     auto overlayTree = std::make_shared<DeviceTree>();
-    if (!overlayTree->loadFromFile(overlayFile)) {
-        printError("Failed to load overlay file: " + overlayFile);
-        return EXIT_FAILURE;
+    if (!overlayTree->loadFromFile(overlayFile, loadOptions())) {
+        printError("Failed to load overlay file: " + overlayFile + "\n" + overlayTree->getLoadError());
+        return DIFF_EXIT_ERROR;
     }
     
     printInfo("Generating diff...");
     DeviceTreeDiff diff(baseTree, overlayTree);
     printDiffResults(diff);
     
-    return diff.getTotalChanges() > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return diff.getTotalChanges() > 0 ? DIFF_EXIT_DIFFERENT : DIFF_EXIT_SAME;
 }
 
 int CLIApp::handleExport(const std::vector<std::string>& args) {
@@ -338,31 +392,37 @@ int CLIApp::handleExport(const std::vector<std::string>& args) {
         return EXIT_FAILURE;
     }
     
+    if (format != "json" && format != "yaml" && format != "dts" && format != "dtb") {
+        printError("Unsupported format: " + format);
+        printInfo("Supported formats: json, yaml, dts, dtb");
+        return EXIT_FAILURE;
+    }
+
     printInfo("Loading device tree from: " + inputFile);
     if (!loadDeviceTree(inputFile)) {
         return EXIT_FAILURE;
     }
     
     printInfo("Exporting to " + format + " format: " + outputFile);
-    
-    std::string content;
-    if (format == "json") {
-        content = deviceTree_->exportAsJSON();
-    } else if (format == "yaml") {
-        content = deviceTree_->exportAsYAML();
+
+    if (format == "dts" || format == "dtb") {
+        std::string error;
+        if (!deviceTree_->saveToFile(outputFile, format == "dts", &error)) {
+            printError(error);
+            return EXIT_FAILURE;
+        }
     } else {
-        printError("Unsupported format: " + format);
-        printInfo("Supported formats: json, yaml");
-        return EXIT_FAILURE;
+        std::ofstream outFile(outputFile, std::ios::binary | std::ios::trunc);
+        if (!outFile) {
+            printError("Failed to open output file: " + outputFile);
+            return EXIT_FAILURE;
+        }
+        outFile << (format == "json" ? deviceTree_->exportAsJSON() : deviceTree_->exportAsYAML());
+        if (!outFile.flush()) {
+            printError("Failed to write output file: " + outputFile);
+            return EXIT_FAILURE;
+        }
     }
-    
-    std::ofstream outFile(outputFile);
-    if (!outFile) {
-        printError("Failed to open output file: " + outputFile);
-        return EXIT_FAILURE;
-    }
-    
-    outFile << content;
     printSuccess("Successfully exported to: " + outputFile);
     
     return EXIT_SUCCESS;
@@ -382,30 +442,32 @@ int CLIApp::handleConvert(const std::vector<std::string>& args) {
         return EXIT_FAILURE;
     }
     
-    // Determine conversion direction based on file extensions
-    std::string inputExt = getFileExtension(inputFile);
-    std::string outputExt = getFileExtension(outputFile);
-    
-    printInfo("Converting " + inputExt + " to " + outputExt + ": " + inputFile + " -> " + outputFile);
-    
+    auto parser = DeviceTreeParserFactory::createParser(inputFile);
+    const bool inputIsDtb = dynamic_cast<DTBParser*>(parser.get()) != nullptr;
+    const bool inputIsDts = dynamic_cast<DTSParser*>(parser.get()) != nullptr;
+    const std::string outputExt = getFileExtension(outputFile);
+    const bool outputIsDtb = outputExt == "dtb" || outputExt == "dtbo";
+    const bool outputIsDts = outputExt == "dts" || outputExt == "dtsi" || outputExt == "dtso";
+
+    std::string error;
     bool success = false;
-    if (inputExt == "dtb" && outputExt == "dts") {
-        success = DeviceTreeUtils::dtbToDts(inputFile, outputFile);
-    } else if (inputExt == "dts" && outputExt == "dtb") {
-        success = DeviceTreeUtils::dtsToDtb(inputFile, outputFile);
+    if (inputIsDtb && outputIsDts) {
+        printInfo("Decompiling DTB to DTS: " + inputFile + " -> " + outputFile);
+        success = DeviceTreeUtils::dtbToDts(inputFile, outputFile, &error);
+    } else if (inputIsDts && outputIsDtb) {
+        printInfo("Compiling DTS to DTB: " + inputFile + " -> " + outputFile);
+        success = DeviceTreeUtils::dtsToDtb(inputFile, outputFile, includePaths_, &error);
     } else {
-        printError("Unsupported conversion: " + inputExt + " to " + outputExt);
-        printInfo("Supported conversions: dtb <-> dts");
+        printError("Unsupported conversion: " + inputFile + " -> " + outputFile);
+        printInfo("Supported conversions: DTB -> .dts/.dtsi/.dtso, DTS -> .dtb/.dtbo");
         return EXIT_FAILURE;
     }
     
-    if (success) {
-        printSuccess("Successfully converted: " + inputFile + " -> " + outputFile);
-    } else {
-        printError("Conversion failed");
+    if (!success) {
+        printError("Conversion failed\n" + error);
         return EXIT_FAILURE;
     }
-    
+    printSuccess("Successfully converted: " + inputFile + " -> " + outputFile);
     return EXIT_SUCCESS;
 }
 
@@ -485,8 +547,8 @@ int CLIApp::handleHelp(const std::vector<std::string>& args) {
 
 bool CLIApp::loadDeviceTree(const std::string& filename) {
     deviceTree_ = std::make_shared<DeviceTree>();
-    if (!deviceTree_->loadFromFile(filename)) {
-        printError("Failed to load device tree file: " + filename);
+    if (!deviceTree_->loadFromFile(filename, loadOptions())) {
+        printError("Failed to load device tree file: " + filename + "\n" + deviceTree_->getLoadError());
         return false;
     }
     return true;
@@ -581,6 +643,16 @@ void CLIApp::printDiffResults(const DeviceTreeDiff& diff) const {
                 std::cout << ":" << Colors::CYAN << change.propertyName << Colors::RESET;
             }
             std::cout << " - " << change.description << "\n";
+            if (change.type == DiffType::Modified || change.type == DiffType::Removed) {
+                if (!change.propertyName.empty()) {
+                    std::cout << "      " << Colors::RED << "- " << change.oldValue << Colors::RESET << "\n";
+                }
+            }
+            if (change.type == DiffType::Modified || change.type == DiffType::Added) {
+                if (!change.propertyName.empty()) {
+                    std::cout << "      " << Colors::GREEN << "+ " << change.newValue << Colors::RESET << "\n";
+                }
+            }
         }
     }
 }
@@ -603,36 +675,21 @@ void CLIApp::printTree(const std::shared_ptr<DeviceTreeNode>& node, const std::s
     }
 }
 
+// Status messages go to stderr so stdout carries only command output.
 void CLIApp::printError(const std::string& message) const {
-    if (isTerminal()) {
-        std::cerr << Colors::RED << Colors::BOLD << "ERROR: " << Colors::RESET << message << "\n";
-    } else {
-        std::cerr << "ERROR: " << message << "\n";
-    }
+    std::cerr << Colors::RED << Colors::BOLD << "ERROR: " << Colors::RESET << message << "\n";
 }
 
 void CLIApp::printWarning(const std::string& message) const {
-    if (isTerminal()) {
-        std::cout << Colors::YELLOW << Colors::BOLD << "WARNING: " << Colors::RESET << message << "\n";
-    } else {
-        std::cout << "WARNING: " << message << "\n";
-    }
+    std::cerr << Colors::YELLOW << Colors::BOLD << "WARNING: " << Colors::RESET << message << "\n";
 }
 
 void CLIApp::printSuccess(const std::string& message) const {
-    if (isTerminal()) {
-        std::cout << Colors::GREEN << Colors::BOLD << "SUCCESS: " << Colors::RESET << message << "\n";
-    } else {
-        std::cout << "SUCCESS: " << message << "\n";
-    }
+    std::cerr << Colors::GREEN << Colors::BOLD << "SUCCESS: " << Colors::RESET << message << "\n";
 }
 
 void CLIApp::printInfo(const std::string& message) const {
-    if (isTerminal()) {
-        std::cout << Colors::BLUE << Colors::BOLD << "INFO: " << Colors::RESET << message << "\n";
-    } else {
-        std::cout << "INFO: " << message << "\n";
-    }
+    std::cerr << Colors::BLUE << Colors::BOLD << "INFO: " << Colors::RESET << message << "\n";
 }
 
 } // namespace DTE 

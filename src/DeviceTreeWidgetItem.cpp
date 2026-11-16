@@ -4,25 +4,29 @@
 namespace DTE {
 
 DeviceTreeWidgetItem::DeviceTreeWidgetItem(std::shared_ptr<DeviceTreeNode> node, QTreeWidget* parent)
-    : QTreeWidgetItem(parent), node_(node) {
+    : QTreeWidgetItem(parent), node_(std::move(node)) {
+    updateDisplay();
+}
+
+DeviceTreeWidgetItem::DeviceTreeWidgetItem(std::shared_ptr<DeviceTreeNode> node, QTreeWidgetItem* parent)
+    : QTreeWidgetItem(parent), node_(std::move(node)) {
     updateDisplay();
 }
 
 void DeviceTreeWidgetItem::updateDisplay() {
     if (!node_) return;
     setText(0, QString::fromStdString(node_->getName()));
-    // TODO: Add appropriate icons for different node types
-    
-    // Remove existing children
+    setToolTip(0, QString::fromStdString(node_->getFullPath()));
+
+    // Rebuild children. They must be created with this item as parent: an
+    // item created with the tree widget as parent is top-level, and
+    // addChild() silently ignores items that already belong to a view.
     while (childCount() > 0) {
         delete takeChild(0);
     }
-    
-    // Add new children
     for (const auto& child : node_->getChildren()) {
-        auto childItem = new DeviceTreeWidgetItem(child, treeWidget());
-        addChild(childItem);
+        new DeviceTreeWidgetItem(child, this);
     }
 }
 
-} // namespace DTE 
+} // namespace DTE

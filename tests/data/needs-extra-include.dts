@@ -1,0 +1,7 @@
+/dts-v1/;
+
+#include <board-config.h>
+
+/ {
+	model = BOARD_MODEL;
+};
