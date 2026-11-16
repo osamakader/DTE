@@ -40,6 +40,17 @@ void PropertyTableWidget::clearNode() {
     setRowCount(0);
 }
 
+bool PropertyTableWidget::selectProperty(const QString& name) {
+    for (int row = 0; row < rowCount(); ++row) {
+        if (item(row, 0) && item(row, 0)->text() == name) {
+            selectRow(row);
+            scrollToItem(item(row, 0));
+            return true;
+        }
+    }
+    return false;
+}
+
 void PropertyTableWidget::populateTable() {
     // Filling cells emits itemChanged; those are not user edits.
     const QSignalBlocker blocker(this);

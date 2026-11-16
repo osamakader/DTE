@@ -3,6 +3,8 @@
 
 #include <functional>
 #include <QApplication>
+#include <QToolButton>
+#include <QShortcut>
 #include <QMenuBar>
 #include <QToolBar>
 #include <QStatusBar>
@@ -48,6 +50,9 @@ MainWindow::MainWindow(QWidget* parent)
     , diffTree_(nullptr)
     , currentDiff_(nullptr)
     , isModified_(false)
+    , findEdit_(nullptr)
+    , findInPropertiesCheck_(nullptr)
+    , findStatusLabel_(nullptr)
     , currentSearchIndex_(-1) {
     
     setWindowTitle("Device Tree Explorer");
@@ -317,8 +322,16 @@ void MainWindow::createCentralWidget() {
     diffViewer_ = new DiffViewerWidget();
     detailTabs_->addTab(diffViewer_, "Diff");
     
+    // Left pane: find bar above the tree
+    auto* leftPane = new QWidget();
+    auto* leftLayout = new QVBoxLayout(leftPane);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(2);
+    leftLayout->addWidget(createFindBar());
+    leftLayout->addWidget(treeWidget_);
+
     // Add widgets to splitter
-    mainSplitter_->addWidget(treeWidget_);
+    mainSplitter_->addWidget(leftPane);
     mainSplitter_->addWidget(detailTabs_);
     mainSplitter_->setStretchFactor(0, 1);
     mainSplitter_->setStretchFactor(1, 2);
@@ -478,19 +491,64 @@ void MainWindow::collapseAll() {
     treeWidget_->collapseAll();
 }
 
+QWidget* MainWindow::createFindBar() {
+    auto* bar = new QWidget();
+    auto* layout = new QHBoxLayout(bar);
+    layout->setContentsMargins(2, 2, 2, 0);
+
+    findEdit_ = new QLineEdit();
+    findEdit_->setObjectName("findEdit");
+    findEdit_->setPlaceholderText("Find node (use / for paths)...");
+    findEdit_->setClearButtonEnabled(true);
+
+    findInPropertiesCheck_ = new QCheckBox("Properties");
+    findInPropertiesCheck_->setObjectName("findInProperties");
+    findInPropertiesCheck_->setToolTip("Also match property names and values");
+
+    auto* prevButton = new QToolButton();
+    prevButton->setArrowType(Qt::UpArrow);
+    prevButton->setToolTip("Previous match (Shift+Enter, Shift+F3)");
+    auto* nextButton = new QToolButton();
+    nextButton->setArrowType(Qt::DownArrow);
+    nextButton->setToolTip("Next match (Enter, F3)");
+
+    findStatusLabel_ = new QLabel();
+    findStatusLabel_->setObjectName("findStatus");
+
+    layout->addWidget(findEdit_, 1);
+    layout->addWidget(findInPropertiesCheck_);
+    layout->addWidget(prevButton);
+    layout->addWidget(nextButton);
+    layout->addWidget(findStatusLabel_);
+
+    connect(findEdit_, &QLineEdit::textChanged, this, &MainWindow::performSearch);
+    connect(findInPropertiesCheck_, &QCheckBox::toggled, this, &MainWindow::performSearch);
+    connect(findEdit_, &QLineEdit::returnPressed, this, &MainWindow::findNext);
+    auto* shiftEnter = new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_Return), findEdit_);
+    shiftEnter->setContext(Qt::WidgetShortcut);
+    connect(shiftEnter, &QShortcut::activated, this, &MainWindow::findPrevious);
+    connect(prevButton, &QToolButton::clicked, this, &MainWindow::findPrevious);
+    connect(nextButton, &QToolButton::clicked, this, &MainWindow::findNext);
+
+    return bar;
+}
+
 void MainWindow::findNode() {
-    // TODO: Implement find functionality
-    showInfo("Find", "Find functionality not yet implemented");
+    findEdit_->setFocus();
+    findEdit_->selectAll();
 }
 
 void MainWindow::findNext() {
-    // TODO: Implement find next functionality
-    showInfo("Find Next", "Find next functionality not yet implemented");
+    if (searchMatches_.empty()) return;
+    currentSearchIndex_ = (currentSearchIndex_ + 1) % static_cast<int>(searchMatches_.size());
+    highlightSearchResult();
 }
 
 void MainWindow::findPrevious() {
-    // TODO: Implement find previous functionality
-    showInfo("Find Previous", "Find previous functionality not yet implemented");
+    if (searchMatches_.empty()) return;
+    const int n = static_cast<int>(searchMatches_.size());
+    currentSearchIndex_ = (currentSearchIndex_ - 1 + n) % n;
+    highlightSearchResult();
 }
 
 void MainWindow::openDiffFile() {
@@ -631,14 +689,25 @@ void MainWindow::updateStatusBar() {
 
 void MainWindow::updateTreeWidget() {
     treeWidget_->clear();
+    nodeItems_.clear();
     propertyTable_->clearNode();
     if (!deviceTree_ || !deviceTree_->getRoot()) {
+        performSearch();
         return;
     }
 
     auto* rootItem = new DeviceTreeWidgetItem(deviceTree_->getRoot(), treeWidget_);
+    std::function<void(QTreeWidgetItem*)> index = [&](QTreeWidgetItem* item) {
+        if (auto* dtItem = dynamic_cast<DeviceTreeWidgetItem*>(item)) {
+            nodeItems_.insert(dtItem->getNode().get(), item);
+        }
+        for (int i = 0; i < item->childCount(); ++i) index(item->child(i));
+    };
+    index(rootItem);
+
     rootItem->setExpanded(true);
     treeWidget_->setCurrentItem(rootItem);
+    performSearch(); // refresh matches for the new tree
 }
 
 void MainWindow::updatePropertyTable() {
@@ -684,11 +753,52 @@ bool MainWindow::saveChanges() {
 }
 
 void MainWindow::performSearch() {
-    // TODO: Implement search functionality
+    searchMatches_.clear();
+    currentSearchIndex_ = -1;
+
+    const QString query = findEdit_->text();
+    if (query.isEmpty() || !deviceTree_) {
+        findStatusLabel_->clear();
+        return;
+    }
+
+    SearchOptions options;
+    options.properties = findInPropertiesCheck_->isChecked();
+    searchMatches_ = deviceTree_->search(query.toStdString(), options);
+
+    if (searchMatches_.empty()) {
+        findStatusLabel_->setText("No matches");
+        return;
+    }
+    // Jump to the first match as the user types
+    currentSearchIndex_ = 0;
+    highlightSearchResult();
 }
 
 void MainWindow::highlightSearchResult() {
-    // TODO: Implement search result highlighting
+    if (currentSearchIndex_ < 0 || currentSearchIndex_ >= static_cast<int>(searchMatches_.size())) {
+        return;
+    }
+    const auto& match = searchMatches_[currentSearchIndex_];
+    selectNode(match.node, QString::fromStdString(match.propertyName));
+    findStatusLabel_->setText(QString("%1 of %2").arg(currentSearchIndex_ + 1).arg(searchMatches_.size()));
+}
+
+bool MainWindow::selectNode(const std::shared_ptr<DeviceTreeNode>& node, const QString& propertyName) {
+    auto* item = node ? nodeItems_.value(node.get(), nullptr) : nullptr;
+    if (!item) {
+        return false;
+    }
+    for (auto* p = item->parent(); p; p = p->parent()) {
+        p->setExpanded(true);
+    }
+    treeWidget_->setCurrentItem(item);
+    treeWidget_->scrollToItem(item);
+    if (!propertyName.isEmpty()) {
+        detailTabs_->setCurrentWidget(propertyTable_);
+        propertyTable_->selectProperty(propertyName);
+    }
+    return true;
 }
 
 void MainWindow::loadSettings() {
@@ -780,28 +890,24 @@ void MainWindow::openFile(const QString& filename) {
 }
 
 void MainWindow::findProperty() {
-    // TODO: Implement find property functionality
-    showInfo("Find Property", "Find property functionality not yet implemented");
+    findInPropertiesCheck_->setChecked(true);
+    findNode();
 }
 
 void MainWindow::showTreeView() {
-    // TODO: Implement show tree view functionality
-    showInfo("Tree View", "Tree view functionality not yet implemented");
+    treeWidget_->setFocus();
 }
 
 void MainWindow::showPropertyView() {
-    // TODO: Implement show property view functionality
-    showInfo("Property View", "Property view functionality not yet implemented");
+    detailTabs_->setCurrentWidget(propertyTable_);
 }
 
 void MainWindow::showSourceView() {
-    // TODO: Implement show source view functionality
-    showInfo("Source View", "Source view functionality not yet implemented");
+    detailTabs_->setCurrentWidget(sourceView_);
 }
 
 void MainWindow::showDiffView() {
-    // TODO: Implement show diff view functionality
-    showInfo("Diff View", "Diff view functionality not yet implemented");
+    detailTabs_->setCurrentWidget(diffViewer_);
 }
 
 } // namespace DTE 

@@ -6,7 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QLabel>
+#include <QLineEdit>
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QTextEdit>
@@ -113,6 +117,77 @@ TEST_F(GuiTest, SourceViewShowsDts) {
     EXPECT_TRUE(text.startsWith("/dts-v1/;"));
     EXPECT_TRUE(text.contains("/memreserve/ 0x88000000 0x100000;"));
     EXPECT_TRUE(text.contains("clock-frequency = <0x1c2000>;"));
+}
+
+namespace {
+QAction* actionNamed(QWidget* w, const QString& text) {
+    for (auto* a : w->findChildren<QAction*>()) {
+        if (a->text() == text) return a;
+    }
+    return nullptr;
+}
+} // namespace
+
+TEST_F(GuiTest, FindJumpsToFirstMatchAndCounts) {
+    window_->loadDeviceTree(kBoard);
+    auto* edit = window_->findChild<QLineEdit*>("findEdit");
+    auto* status = window_->findChild<QLabel*>("findStatus");
+    ASSERT_TRUE(edit && status);
+
+    edit->setText("cpu@");
+    ASSERT_TRUE(tree_->currentItem());
+    EXPECT_EQ(tree_->currentItem()->text(0), "cpu@0");
+    EXPECT_EQ(status->text(), "1 of 2");
+    EXPECT_TRUE(tree_->currentItem()->parent()->isExpanded());
+
+    auto* next = actionNamed(window_.get(), "Find &Next");
+    auto* prev = actionNamed(window_.get(), "Find &Previous");
+    ASSERT_TRUE(next && prev);
+    next->trigger();
+    EXPECT_EQ(tree_->currentItem()->text(0), "cpu@1");
+    EXPECT_EQ(status->text(), "2 of 2");
+    next->trigger(); // wraps around
+    EXPECT_EQ(tree_->currentItem()->text(0), "cpu@0");
+    prev->trigger(); // and backwards
+    EXPECT_EQ(tree_->currentItem()->text(0), "cpu@1");
+
+    edit->setText("no-such-node");
+    EXPECT_EQ(status->text(), "No matches");
+    edit->clear();
+    EXPECT_TRUE(status->text().isEmpty());
+}
+
+TEST_F(GuiTest, FindByPathAndInProperties) {
+    window_->loadDeviceTree(kBoard);
+    auto* edit = window_->findChild<QLineEdit*>("findEdit");
+    auto* inProps = window_->findChild<QCheckBox*>("findInProperties");
+    ASSERT_TRUE(edit && inProps);
+
+    edit->setText("/soc/eth");
+    ASSERT_TRUE(tree_->currentItem());
+    EXPECT_EQ(tree_->currentItem()->text(0), "ethernet@20000000");
+
+    edit->setText("ns16550");
+    EXPECT_EQ(window_->findChild<QLabel*>("findStatus")->text(), "No matches");
+
+    inProps->setChecked(true);
+    ASSERT_TRUE(tree_->currentItem());
+    EXPECT_EQ(tree_->currentItem()->text(0), "serial@10000000");
+    auto rows = props_->selectionModel()->selectedRows();
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(props_->item(rows[0].row(), 0)->text(), "compatible");
+}
+
+TEST_F(GuiTest, FindIsRefreshedWhenAnotherFileIsLoaded) {
+    window_->loadDeviceTree(kBoard);
+    auto* edit = window_->findChild<QLineEdit*>("findEdit");
+    edit->setText("serial");
+    EXPECT_EQ(window_->findChild<QLabel*>("findStatus")->text(), "1 of 1");
+
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/preprocessed/board.dts");
+    EXPECT_EQ(window_->findChild<QLabel*>("findStatus")->text(), "1 of 1");
+    ASSERT_TRUE(tree_->currentItem());
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc/serial@10000000");
 }
 
 TEST_F(GuiTest, Screenshot) {

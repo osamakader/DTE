@@ -27,6 +27,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QHash>
 
 #include "DeviceTree.h"
 #include "DeviceTreeDiff.h"
@@ -175,10 +176,15 @@ private:
     QString currentDiffFile_;
     bool isModified_;
     
-    // Search
-    QString searchText_;
-    QList<QTreeWidgetItem*> searchResults_;
+    // Search (find bar above the tree)
+    QLineEdit* findEdit_;
+    QCheckBox* findInPropertiesCheck_;
+    QLabel* findStatusLabel_;
+    std::vector<SearchMatch> searchMatches_;
     int currentSearchIndex_;
+
+    // Tree items by node, rebuilt with the tree widget
+    QHash<const DeviceTreeNode*, QTreeWidgetItem*> nodeItems_;
     
     // Settings
     QSettings settings_;
@@ -203,6 +209,10 @@ private:
     
     void performSearch();
     void highlightSearchResult();
+    QWidget* createFindBar();
+    // Selects the node in the tree (expanding its parents) and, if given,
+    // the property row. Returns false if the node is not in the tree.
+    bool selectNode(const std::shared_ptr<DeviceTreeNode>& node, const QString& propertyName = {});
     
     void loadSettings();
     void saveSettings();
