@@ -14,6 +14,7 @@ add_executable(dte-tests
     WriterTest.cpp
     SearchTest.cpp
     DtsValueTest.cpp
+    NodeTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )
