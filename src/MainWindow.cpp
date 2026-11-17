@@ -1,8 +1,14 @@
 #include "MainWindow.h"
 #include "DeviceTreeParser.h"
+#include "DtsValue.h"
+#include "PropertyDialog.h"
 
 #include <functional>
 #include <QApplication>
+#include <QTimer>
+#include <QSet>
+#include <QMenu>
+#include <QInputDialog>
 #include <QFileInfo>
 #include <QToolButton>
 #include <QShortcut>
@@ -54,7 +60,8 @@ MainWindow::MainWindow(QWidget* parent)
     , findEdit_(nullptr)
     , findInPropertiesCheck_(nullptr)
     , findStatusLabel_(nullptr)
-    , currentSearchIndex_(-1) {
+    , currentSearchIndex_(-1)
+    , undoStack_(new QUndoStack(this)) {
     
     setWindowTitle("Device Tree Explorer");
     setMinimumSize(800, 600);
@@ -79,10 +86,25 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onPropertyChanged);
     connect(diffViewer_, &DiffViewerWidget::entryActivated,
             this, &MainWindow::onDiffEntryActivated);
+
+    // Editing
+    connect(undoStack_, &QUndoStack::cleanChanged, this, [this](bool clean) { setModified(!clean); });
+    connect(treeWidget_, &QWidget::customContextMenuRequested, this, &MainWindow::showTreeContextMenu);
+    propertyTable_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(propertyTable_, &QWidget::customContextMenuRequested, this, &MainWindow::showPropertyContextMenu);
+    connect(propertyTable_, &QTableWidget::cellDoubleClicked, this, &MainWindow::onPropertyCellDoubleClicked);
+    connect(propertyTable_, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateEditActions);
+    updateEditActions();
 }
 
 MainWindow::~MainWindow() {
     saveSettings();
+    // Child objects are destroyed after this destructor has run. Their
+    // signals (e.g. QUndoStack::cleanChanged, emitted by its clear() on
+    // destruction) must not reach the partially destroyed window.
+    for (QObject* child : findChildren<QObject*>()) {
+        QObject::disconnect(child, nullptr, this, nullptr);
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -141,15 +163,24 @@ void MainWindow::createActions() {
     connect(exitAction_, &QAction::triggered, this, &QWidget::close);
     
     // Edit actions
-    addNodeAction_ = new QAction(QIcon(":/icons/add_node.png"), "Add &Node", this);
-    addNodeAction_->setStatusTip("Add a new node");
+    undoAction_ = undoStack_->createUndoAction(this, "&Undo");
+    undoAction_->setShortcut(QKeySequence::Undo);
+    redoAction_ = undoStack_->createRedoAction(this, "&Redo");
+    redoAction_->setShortcut(QKeySequence::Redo);
+
+    addNodeAction_ = new QAction(QIcon(":/icons/add_node.png"), "Add &Node...", this);
+    addNodeAction_->setStatusTip("Add a child node to the selected node");
     connect(addNodeAction_, &QAction::triggered, this, &MainWindow::addNode);
     
     removeNodeAction_ = new QAction(QIcon(":/icons/remove_node.png"), "Remove &Node", this);
     removeNodeAction_->setStatusTip("Remove the selected node");
     connect(removeNodeAction_, &QAction::triggered, this, &MainWindow::removeNode);
+
+    renameNodeAction_ = new QAction("Re&name Node...", this);
+    renameNodeAction_->setStatusTip("Rename the selected node");
+    connect(renameNodeAction_, &QAction::triggered, this, &MainWindow::renameNode);
     
-    addPropertyAction_ = new QAction(QIcon(":/icons/add_property.png"), "Add &Property", this);
+    addPropertyAction_ = new QAction(QIcon(":/icons/add_property.png"), "Add &Property...", this);
     addPropertyAction_->setStatusTip("Add a new property");
     connect(addPropertyAction_, &QAction::triggered, this, &MainWindow::addProperty);
     
@@ -157,7 +188,7 @@ void MainWindow::createActions() {
     removePropertyAction_->setStatusTip("Remove the selected property");
     connect(removePropertyAction_, &QAction::triggered, this, &MainWindow::removeProperty);
     
-    editPropertyAction_ = new QAction(QIcon(":/icons/edit_property.png"), "&Edit Property", this);
+    editPropertyAction_ = new QAction(QIcon(":/icons/edit_property.png"), "&Edit Property...", this);
     editPropertyAction_->setStatusTip("Edit the selected property");
     connect(editPropertyAction_, &QAction::triggered, this, &MainWindow::editProperty);
     
@@ -228,7 +259,11 @@ void MainWindow::createMenus() {
     
     // Edit menu
     QMenu* editMenu = menuBar()->addMenu("&Edit");
+    editMenu->addAction(undoAction_);
+    editMenu->addAction(redoAction_);
+    editMenu->addSeparator();
     editMenu->addAction(addNodeAction_);
+    editMenu->addAction(renameNodeAction_);
     editMenu->addAction(removeNodeAction_);
     editMenu->addSeparator();
     editMenu->addAction(addPropertyAction_);
@@ -268,6 +303,9 @@ void MainWindow::createToolBars() {
     
     // Edit toolbar
     QToolBar* editToolBar = addToolBar("Edit");
+    editToolBar->addAction(undoAction_);
+    editToolBar->addAction(redoAction_);
+    editToolBar->addSeparator();
     editToolBar->addAction(addNodeAction_);
     editToolBar->addAction(removeNodeAction_);
     editToolBar->addSeparator();
@@ -361,11 +399,9 @@ void MainWindow::openFile() {
 bool MainWindow::saveFile() {
     if (currentFile_.isEmpty()) {
         saveFileAs();
-        return !currentFile_.isEmpty();
-    } else {
-        saveDeviceTree(currentFile_);
-        return true;
+        return !currentFile_.isEmpty() && !isModified_;
     }
+    return saveDeviceTree(currentFile_);
 }
 
 void MainWindow::saveFileAs() {
@@ -465,28 +501,80 @@ void MainWindow::exportAsDTB() {
 }
 
 void MainWindow::addNode() {
-    // TODO: Implement add node functionality
-    showInfo("Add Node", "Add node functionality not yet implemented");
+    if (!deviceTree_) {
+        showError("Add Node", "No device tree loaded");
+        return;
+    }
+    auto parent = selectedNode() ? selectedNode() : deviceTree_->getRoot();
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, "Add Node", QString("Name of the new child of %1\n(name or name@unit-address):")
+                              .arg(QString::fromStdString(parent->getFullPath())),
+        QLineEdit::Normal, QString(), &ok);
+    if (!ok) return;
+    const QString error = applyAddNode(parent, name);
+    if (!error.isEmpty()) showError("Add Node", error);
 }
 
 void MainWindow::removeNode() {
-    // TODO: Implement remove node functionality
-    showInfo("Remove Node", "Remove node functionality not yet implemented");
+    const QString error = applyRemoveNode(selectedNode());
+    if (!error.isEmpty()) showError("Remove Node", error);
+}
+
+void MainWindow::renameNode() {
+    auto node = selectedNode();
+    if (!node) return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "Rename Node", "New name:", QLineEdit::Normal,
+                                               QString::fromStdString(node->getName()), &ok);
+    if (!ok) return;
+    const QString error = applyRenameNode(node, name);
+    if (!error.isEmpty()) showError("Rename Node", error);
 }
 
 void MainWindow::addProperty() {
-    // TODO: Implement add property functionality
-    showInfo("Add Property", "Add property functionality not yet implemented");
+    auto node = selectedNode();
+    if (!node) {
+        showError("Add Property", "Select a node first");
+        return;
+    }
+    PropertyDialog dialog("Add Property", QString::fromStdString(node->getFullPath()), QString(), QString(),
+                          [this, node](const QString& name, const QString& value) {
+                              return validatePropertyInput(node, QString(), name, value);
+                          },
+                          this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString error = applySetProperty(node, QString(), dialog.name(), dialog.value());
+    if (!error.isEmpty()) showError("Add Property", error);
 }
 
 void MainWindow::removeProperty() {
-    // TODO: Implement remove property functionality
-    showInfo("Remove Property", "Remove property functionality not yet implemented");
+    const QString name = propertyTable_->selectedPropertyName();
+    if (name.isEmpty()) {
+        showError("Remove Property", "Select a property first");
+        return;
+    }
+    const QString error = applyRemoveProperty(propertyTable_->node(), name);
+    if (!error.isEmpty()) showError("Remove Property", error);
 }
 
 void MainWindow::editProperty() {
-    // TODO: Implement edit property functionality
-    showInfo("Edit Property", "Edit property functionality not yet implemented");
+    auto node = propertyTable_->node();
+    const QString oldName = propertyTable_->selectedPropertyName();
+    const DeviceTreeProperty* prop = node ? node->findProperty(oldName.toStdString()) : nullptr;
+    if (!prop) {
+        showError("Edit Property", "Select a property first");
+        return;
+    }
+    PropertyDialog dialog("Edit Property", QString::fromStdString(node->getFullPath()), oldName,
+                          QString::fromStdString(prop->getValueAsString()),
+                          [this, node, oldName](const QString& name, const QString& value) {
+                              return validatePropertyInput(node, oldName, name, value);
+                          },
+                          this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString error = applySetProperty(node, oldName, dialog.name(), dialog.value());
+    if (!error.isEmpty()) showError("Edit Property", error);
 }
 
 void MainWindow::expandAll() {
@@ -586,15 +674,21 @@ void MainWindow::openDiffFile(const QString& filename) {
 
     diffTree_ = other;
     currentDiffFile_ = filename;
-    currentDiff_ = std::make_unique<DeviceTreeDiff>(deviceTree_, diffTree_);
-    const QString baseName = currentFile_.isEmpty() ? QString("Untitled") : QFileInfo(currentFile_).fileName();
-    diffViewer_->setDiff(*currentDiff_, baseName, QFileInfo(filename).fileName());
+    refreshDiff();
     showDiffView();
 
     const size_t changes = currentDiff_->getTotalChanges();
     statusBar()->showMessage(changes == 0 ? QString("No differences with %1").arg(filename)
                                           : QString("%1 changes compared with %2").arg(changes).arg(filename),
                              5000);
+}
+
+void MainWindow::refreshDiff() {
+    // Recomputed after every edit, so the Diff tab stays live.
+    if (!diffTree_ || !deviceTree_) return;
+    currentDiff_ = std::make_unique<DeviceTreeDiff>(deviceTree_, diffTree_);
+    const QString baseName = currentFile_.isEmpty() ? QString("Untitled") : QFileInfo(currentFile_).fileName();
+    diffViewer_->setDiff(*currentDiff_, baseName, QFileInfo(currentDiffFile_).fileName());
 }
 
 void MainWindow::clearDiff() {
@@ -628,6 +722,7 @@ void MainWindow::exportDiff() {
 
 void MainWindow::onTreeItemSelectionChanged() {
     updatePropertyTable();
+    updateEditActions();
 }
 
 void MainWindow::onTreeItemDoubleClicked(QTreeWidgetItem* item, int column) {
@@ -637,10 +732,172 @@ void MainWindow::onTreeItemDoubleClicked(QTreeWidgetItem* item, int column) {
 }
 
 void MainWindow::onPropertyChanged(const QString& propertyName, const QString& newValue) {
-    // TODO: apply edits once property editing is implemented (the table is
-    // read-only until then, so this is not reached from user input).
-    Q_UNUSED(propertyName);
-    Q_UNUSED(newValue);
+    // Called while the table is committing the edit; apply it (which
+    // rebuilds the table) once control returns to the event loop.
+    auto node = propertyTable_->node();
+    QTimer::singleShot(0, this, [this, node, propertyName, newValue]() {
+        const QString error = applySetProperty(node, propertyName, propertyName, newValue);
+        if (!error.isEmpty()) {
+            statusBar()->showMessage(
+                QString("Invalid value for '%1': %2. Change reverted.").arg(propertyName, error), 10000);
+            updatePropertyTable();
+        }
+    });
+}
+
+void MainWindow::onPropertyCellDoubleClicked(int row, int column) {
+    // The value column edits in place; elsewhere open the dialog.
+    if (column != 2 && row >= 0) {
+        editProperty();
+    }
+}
+
+void MainWindow::showTreeContextMenu(const QPoint& pos) {
+    if (auto* item = treeWidget_->itemAt(pos)) {
+        treeWidget_->setCurrentItem(item);
+    }
+    if (!deviceTree_) return;
+    QMenu menu(this);
+    menu.addAction(addNodeAction_);
+    menu.addAction(addPropertyAction_);
+    menu.addSeparator();
+    menu.addAction(renameNodeAction_);
+    menu.addAction(removeNodeAction_);
+    menu.exec(treeWidget_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showPropertyContextMenu(const QPoint& pos) {
+    if (auto* item = propertyTable_->itemAt(pos)) {
+        propertyTable_->selectRow(item->row());
+    }
+    if (!propertyTable_->node()) return;
+    QMenu menu(this);
+    menu.addAction(addPropertyAction_);
+    menu.addAction(editPropertyAction_);
+    menu.addAction(removePropertyAction_);
+    menu.exec(propertyTable_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::updateEditActions() {
+    const auto node = selectedNode();
+    const bool isRoot = node && !node->getParent();
+    const bool haveProperty = !propertyTable_->selectedPropertyName().isEmpty();
+    addNodeAction_->setEnabled(deviceTree_ != nullptr);
+    renameNodeAction_->setEnabled(node && !isRoot);
+    removeNodeAction_->setEnabled(node && !isRoot);
+    addPropertyAction_->setEnabled(node != nullptr);
+    editPropertyAction_->setEnabled(haveProperty);
+    removePropertyAction_->setEnabled(haveProperty);
+}
+
+std::shared_ptr<DeviceTreeNode> MainWindow::selectedNode() const {
+    auto* item = dynamic_cast<DeviceTreeWidgetItem*>(treeWidget_->currentItem());
+    return item && item->isSelected() ? item->getNode() : nullptr;
+}
+
+EditNotify MainWindow::editNotifier() {
+    return [this](const std::shared_ptr<DeviceTreeNode>& focus, const QString& property) {
+        onTreeEdited(focus, property);
+    };
+}
+
+QString MainWindow::validatePropertyInput(const std::shared_ptr<DeviceTreeNode>& node, const QString& oldName,
+                                          const QString& name, const QString& valueText,
+                                          DeviceTreeProperty* parsed) const {
+    if (!node) return "No node selected";
+    std::string error;
+    const std::string newName = name.trimmed().toStdString();
+    if (!isValidPropertyName(newName, &error)) return QString::fromStdString(error);
+    if (newName != oldName.toStdString() && node->findProperty(newName)) {
+        return QString("Property '%1' already exists on %2")
+            .arg(QString::fromStdString(newName), QString::fromStdString(node->getFullPath()));
+    }
+    PropertyValue value;
+    if (!parseDtsValue(valueText.toStdString(), value, &error)) return QString::fromStdString(error);
+    if (parsed) *parsed = DeviceTreeProperty(newName, value);
+    return {};
+}
+
+QString MainWindow::applyAddNode(const std::shared_ptr<DeviceTreeNode>& parent, const QString& name) {
+    if (!deviceTree_ || !parent) return "No node selected";
+    const std::string n = name.trimmed().toStdString();
+    std::string error;
+    if (!isValidNodeName(n, &error)) return QString::fromStdString(error);
+    if (parent->findChild(n)) {
+        return QString("A node named '%1' already exists under %2")
+            .arg(QString::fromStdString(n), QString::fromStdString(parent->getFullPath()));
+    }
+    undoStack_->push(new AddNodeCommand(parent, std::make_shared<DeviceTreeNode>(n), editNotifier()));
+    return {};
+}
+
+QString MainWindow::applyRemoveNode(const std::shared_ptr<DeviceTreeNode>& node) {
+    if (!deviceTree_ || !node) return "No node selected";
+    if (!node->getParent()) return "The root node cannot be removed";
+    undoStack_->push(new RemoveNodeCommand(node, editNotifier()));
+    return {};
+}
+
+QString MainWindow::applyRenameNode(const std::shared_ptr<DeviceTreeNode>& node, const QString& newName) {
+    if (!deviceTree_ || !node) return "No node selected";
+    auto parent = node->getParent();
+    if (!parent) return "The root node cannot be renamed";
+    const std::string n = newName.trimmed().toStdString();
+    if (n == node->getName()) return {};
+    std::string error;
+    if (!isValidNodeName(n, &error)) return QString::fromStdString(error);
+    if (parent->findChild(n)) {
+        return QString("A node named '%1' already exists under %2")
+            .arg(QString::fromStdString(n), QString::fromStdString(parent->getFullPath()));
+    }
+    undoStack_->push(new RenameNodeCommand(node, n, editNotifier()));
+    return {};
+}
+
+QString MainWindow::applySetProperty(const std::shared_ptr<DeviceTreeNode>& node, const QString& oldName,
+                                     const QString& newName, const QString& valueText) {
+    if (!deviceTree_ || !node) return "No node selected";
+    if (!oldName.isEmpty() && !node->findProperty(oldName.toStdString())) {
+        return QString("Property '%1' no longer exists").arg(oldName);
+    }
+    DeviceTreeProperty property;
+    const QString error = validatePropertyInput(node, oldName, newName, valueText, &property);
+    if (!error.isEmpty()) return error;
+    if (!oldName.isEmpty() && *node->findProperty(oldName.toStdString()) == property) {
+        return {}; // unchanged
+    }
+    undoStack_->push(new SetPropertyCommand(node, oldName.toStdString(), property, editNotifier()));
+    return {};
+}
+
+QString MainWindow::applyRemoveProperty(const std::shared_ptr<DeviceTreeNode>& node, const QString& name) {
+    if (!deviceTree_ || !node) return "No node selected";
+    if (!node->findProperty(name.toStdString())) {
+        return QString("Property '%1' does not exist").arg(name);
+    }
+    undoStack_->push(new RemovePropertyCommand(node, name.toStdString(), editNotifier()));
+    return {};
+}
+
+void MainWindow::onTreeEdited(const std::shared_ptr<DeviceTreeNode>& focus, const QString& property) {
+    // Rebuild the tree view, keeping which nodes were expanded.
+    QSet<const DeviceTreeNode*> expanded;
+    for (auto it = nodeItems_.cbegin(); it != nodeItems_.cend(); ++it) {
+        if (it.value()->isExpanded()) expanded.insert(it.key());
+    }
+    rebuildTreeItems();
+    for (auto it = nodeItems_.cbegin(); it != nodeItems_.cend(); ++it) {
+        if (expanded.contains(it.key())) it.value()->setExpanded(true);
+    }
+    if (!selectNode(focus, property) && deviceTree_ && deviceTree_->getRoot()) {
+        selectNode(deviceTree_->getRoot());
+    }
+
+    updateSourceView();
+    updateStatusBar();
+    updateSearchMatches(false);
+    refreshDiff();
+    updateEditActions();
 }
 
 void MainWindow::about() {
@@ -681,16 +938,17 @@ void MainWindow::loadDeviceTree(const QString& filename) {
     deviceTree_ = tree;
     currentFile_ = filename;
     clearDiff();
+    undoStack_->clear();
     setModified(false);
     updateTreeWidget();
     updateSourceView();
     updateStatusBar();
 }
 
-void MainWindow::saveDeviceTree(const QString& filename) {
+bool MainWindow::saveDeviceTree(const QString& filename) {
     if (!deviceTree_) {
         showError("Save Error", "No device tree loaded");
-        return;
+        return false;
     }
 
     // Format follows the extension; anything that is not a blob is source.
@@ -698,13 +956,15 @@ void MainWindow::saveDeviceTree(const QString& filename) {
     std::string error;
     if (!deviceTree_->saveToFile(filename.toStdString(), asDTS, &error)) {
         showError("Save Error", QString::fromStdString(error));
-        return;
+        return false;
     }
 
     currentFile_ = filename;
     deviceTree_->setSourceFile(filename.toStdString());
+    undoStack_->setClean();
     setModified(false);
     updateStatusBar();
+    return true;
 }
 
 void MainWindow::updateWindowTitle() {
@@ -738,15 +998,12 @@ void MainWindow::updateStatusBar() {
     statusLabel_->setText(QString("%1 — %2 nodes, %3 properties").arg(name).arg(nodes).arg(props));
 }
 
-void MainWindow::updateTreeWidget() {
+QTreeWidgetItem* MainWindow::rebuildTreeItems() {
     treeWidget_->clear();
     nodeItems_.clear();
-    propertyTable_->clearNode();
     if (!deviceTree_ || !deviceTree_->getRoot()) {
-        performSearch();
-        return;
+        return nullptr;
     }
-
     auto* rootItem = new DeviceTreeWidgetItem(deviceTree_->getRoot(), treeWidget_);
     std::function<void(QTreeWidgetItem*)> index = [&](QTreeWidgetItem* item) {
         if (auto* dtItem = dynamic_cast<DeviceTreeWidgetItem*>(item)) {
@@ -755,10 +1012,17 @@ void MainWindow::updateTreeWidget() {
         for (int i = 0; i < item->childCount(); ++i) index(item->child(i));
     };
     index(rootItem);
-
     rootItem->setExpanded(true);
-    treeWidget_->setCurrentItem(rootItem);
+    return rootItem;
+}
+
+void MainWindow::updateTreeWidget() {
+    propertyTable_->clearNode();
+    if (auto* rootItem = rebuildTreeItems()) {
+        treeWidget_->setCurrentItem(rootItem);
+    }
     performSearch(); // refresh matches for the new tree
+    updateEditActions();
 }
 
 void MainWindow::updatePropertyTable() {
@@ -804,6 +1068,10 @@ bool MainWindow::saveChanges() {
 }
 
 void MainWindow::performSearch() {
+    updateSearchMatches(true);
+}
+
+void MainWindow::updateSearchMatches(bool jumpToFirst) {
     searchMatches_.clear();
     currentSearchIndex_ = -1;
 
@@ -819,6 +1087,11 @@ void MainWindow::performSearch() {
 
     if (searchMatches_.empty()) {
         findStatusLabel_->setText("No matches");
+        return;
+    }
+    if (!jumpToFirst) {
+        // After an edit: keep the user's selection, just update the count
+        findStatusLabel_->setText(QString("%1 matches").arg(searchMatches_.size()));
         return;
     }
     // Jump to the first match as the user types
@@ -931,6 +1204,7 @@ void MainWindow::newFile() {
     deviceTree_ = std::make_shared<DeviceTree>();
     currentFile_.clear();
     clearDiff();
+    undoStack_->clear();
     setModified(false);
     updateTreeWidget();
     updateSourceView();
