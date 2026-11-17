@@ -122,7 +122,8 @@ TEST_F(CompiledBoard, DecodesBytesAndEmptyProperties) {
     ASSERT_TRUE(gic);
     const auto* ic = static_cast<const DeviceTreeNode&>(*gic).findProperty("interrupt-controller");
     ASSERT_TRUE(ic);
-    EXPECT_EQ(ic->getValueAsString(), "\"\"");
+    EXPECT_TRUE(ic->isEmpty());
+    EXPECT_EQ(ic->getValueAsString(), "");
 }
 
 TEST_F(CompiledBoard, ParsesMemoryReservations) {

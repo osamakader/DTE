@@ -45,6 +45,11 @@ bool DeviceTreeProperty::isString() const {
     return std::holds_alternative<std::string>(value_);
 }
 
+bool DeviceTreeProperty::isEmpty() const {
+    const auto* str = std::get_if<std::string>(&value_);
+    return str && str->empty();
+}
+
 bool DeviceTreeProperty::isStringList() const {
     return std::holds_alternative<StringList>(value_);
 }
@@ -64,7 +69,9 @@ bool DeviceTreeProperty::isCells64() const {
 std::string DeviceTreeProperty::getValueAsString() const {
     std::ostringstream oss;
     
-    if (isString()) {
+    if (isEmpty()) {
+        return {};
+    } else if (isString()) {
         oss << quoteDtsString(std::get<std::string>(value_));
     } else if (isStringList()) {
         const auto& list = std::get<StringList>(value_);
@@ -331,9 +338,7 @@ void writeDtsNode(std::ostream& os, const DeviceTreeNode& node, int depth) {
 
     for (const auto& prop : node.getProperties()) {
         os << in << '\t' << prop.getName();
-        const auto* str = std::get_if<std::string>(&prop.getValue());
-        if (!(str && str->empty())) {
-            // An empty string is how empty (boolean) properties are stored.
+        if (!prop.isEmpty()) {
             os << " = " << prop.getValueAsString();
         }
         os << ";\n";

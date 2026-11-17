@@ -13,7 +13,9 @@ std::string render(const DTE::PropertyValue& v) {
 
 TEST(Property, RendersStringsInDtsSyntax) {
     EXPECT_EQ(render(std::string("okay")), "\"okay\"");
-    EXPECT_EQ(render(std::string("")), "\"\"");
+    EXPECT_EQ(render(std::string("")), ""); // empty property, e.g. `ranges;`
+    EXPECT_TRUE(DeviceTreeProperty("ranges", std::string()).isEmpty());
+    EXPECT_FALSE(DeviceTreeProperty("s", std::string("x")).isEmpty());
 }
 
 TEST(Property, EscapesSpecialCharacters) {

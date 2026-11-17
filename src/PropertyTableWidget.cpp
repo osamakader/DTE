@@ -73,7 +73,9 @@ void PropertyTableWidget::populateTable() {
         
         // Property type
         QString typeStr;
-        if (prop.isString()) {
+        if (prop.isEmpty()) {
+            typeStr = "Empty";
+        } else if (prop.isString()) {
             typeStr = "String";
         } else if (prop.isStringList()) {
             typeStr = "String list";

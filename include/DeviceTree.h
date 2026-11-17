@@ -34,13 +34,16 @@ public:
     // Type checking methods
     bool isString() const;
     bool isStringList() const;
+    // Zero-length property such as `ranges;` (stored as an empty string)
+    bool isEmpty() const;
     bool isBinary() const;
     bool isCells() const;
     bool isCells64() const;
     
     // Value conversion methods
     // getValueAsString() renders the value in DTS syntax: "escaped",
-    // "a", "b", <0x1 0x2> or [00 11].
+    // "a", "b", <0x1 0x2> or [00 11]; an empty property renders as "" (no
+    // text), since `""` in DTS is a one-byte value.
     std::string getValueAsString() const;
     // The string(s) of a string or string-list property, unescaped;
     // empty for other types.
