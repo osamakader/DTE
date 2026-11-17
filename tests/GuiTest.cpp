@@ -12,9 +12,13 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QStandardPaths>
+#include <QStatusBar>
+#include <QUndoStack>
 #include <QTemporaryDir>
 #include <QFile>
 #include "DiffViewerWidget.h"
+#include "PropertyDialog.h"
+#include "DtsValue.h"
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTreeWidget>
@@ -110,8 +114,12 @@ TEST_F(GuiTest, SelectingNodeShowsItsProperties) {
     EXPECT_EQ(props_->rowCount(), 0);
 }
 
-TEST_F(GuiTest, PropertyTableIsReadOnly) {
-    EXPECT_EQ(props_->editTriggers(), QAbstractItemView::NoEditTriggers);
+TEST_F(GuiTest, OnlyValueColumnIsEditable) {
+    window_->loadDeviceTree(kBoard);
+    ASSERT_GT(props_->rowCount(), 0);
+    EXPECT_FALSE(props_->item(0, 0)->flags() & Qt::ItemIsEditable);
+    EXPECT_FALSE(props_->item(0, 1)->flags() & Qt::ItemIsEditable);
+    EXPECT_TRUE(props_->item(0, 2)->flags() & Qt::ItemIsEditable);
 }
 
 TEST_F(GuiTest, SourceViewShowsDts) {
@@ -316,6 +324,221 @@ TEST_F(GuiTest, DiffWithIdenticalTree) {
     EXPECT_EQ(window_->findChild<QLabel*>("diffStats")->text().toStdString(), "No differences.");
 }
 
+// ---------------------------------------------------------------------------
+// Editing
+// ---------------------------------------------------------------------------
+
+namespace {
+std::shared_ptr<DTE::DeviceTreeNode> nodeAt(MainWindow& w, const std::string& path) {
+    return w.deviceTree()->findNodeByPath(path);
+}
+std::vector<std::string> childNames(const std::shared_ptr<DTE::DeviceTreeNode>& n) {
+    std::vector<std::string> out;
+    for (const auto& c : n->getChildren()) out.push_back(c->getName());
+    return out;
+}
+std::vector<std::string> propNames(const std::shared_ptr<DTE::DeviceTreeNode>& n) {
+    std::vector<std::string> out;
+    for (const auto& p : n->getProperties()) out.push_back(p.getName());
+    return out;
+}
+} // namespace
+
+TEST_F(GuiTest, AddNodeUndoRedo) {
+    window_->loadDeviceTree(kBoard);
+    auto* stack = window_->undoStack();
+    auto soc = nodeAt(*window_, "/soc");
+    EXPECT_FALSE(window_->isModified());
+
+    ASSERT_EQ(window_->applyAddNode(soc, "watchdog@3000").toStdString(), "");
+    EXPECT_EQ(childNames(soc).back(), "watchdog@3000");
+    ASSERT_TRUE(tree_->currentItem());
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc/watchdog@3000");
+    EXPECT_TRUE(window_->isModified());
+    EXPECT_TRUE(window_->windowTitle().endsWith("*"));
+    EXPECT_EQ(stack->undoText(), "Add node 'watchdog@3000'");
+    EXPECT_TRUE(source_->toPlainText().contains("watchdog@3000 {"));
+
+    stack->undo();
+    EXPECT_EQ(childNames(soc), (std::vector<std::string>{"interrupt-controller@1000", "serial@10000000",
+                                                         "ethernet@20000000"}));
+    EXPECT_FALSE(window_->isModified()); // back at the clean state
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc");
+
+    stack->redo();
+    EXPECT_EQ(childNames(soc).back(), "watchdog@3000");
+    EXPECT_TRUE(window_->isModified());
+}
+
+TEST_F(GuiTest, InvalidEditsAreRejectedWithoutTouchingHistory) {
+    window_->loadDeviceTree(kBoard);
+    auto* stack = window_->undoStack();
+    auto root = window_->deviceTree()->getRoot();
+    auto soc = nodeAt(*window_, "/soc");
+
+    EXPECT_NE(window_->applyAddNode(soc, "bad name").indexOf("invalid character"), -1);
+    EXPECT_NE(window_->applyAddNode(soc, "serial@10000000").indexOf("already exists"), -1);
+    EXPECT_NE(window_->applyRemoveNode(root).indexOf("root node cannot be removed"), -1);
+    EXPECT_NE(window_->applyRenameNode(root, "x").indexOf("root node cannot be renamed"), -1);
+    EXPECT_NE(window_->applyRenameNode(nodeAt(*window_, "/cpus/cpu@0"), "cpu@1").indexOf("already exists"), -1);
+    EXPECT_NE(window_->applySetProperty(soc, "", "reg", "<1 2").indexOf("Missing '>'"), -1);
+    EXPECT_NE(window_->applySetProperty(soc, "", "compatible", "\"x\"").indexOf("already exists"), -1);
+    EXPECT_NE(window_->applySetProperty(soc, "", "has space", "<1>").indexOf("invalid character"), -1);
+    EXPECT_NE(window_->applyRemoveProperty(soc, "nope").indexOf("does not exist"), -1);
+
+    // No-ops do not create history either
+    EXPECT_EQ(window_->applyRenameNode(soc, "soc").toStdString(), "");
+    EXPECT_EQ(window_->applySetProperty(soc, "compatible", "compatible", "\"simple-bus\"").toStdString(), "");
+
+    EXPECT_EQ(stack->count(), 0);
+    EXPECT_FALSE(window_->isModified());
+}
+
+TEST_F(GuiTest, RemoveNodeRestoresSubtreeInPlace) {
+    window_->loadDeviceTree(kBoard);
+    auto cpus = nodeAt(*window_, "/cpus");
+    auto cpu0 = nodeAt(*window_, "/cpus/cpu@0");
+    const auto root = window_->deviceTree()->getRoot();
+    const auto before = childNames(root);
+
+    ASSERT_EQ(window_->applyRemoveNode(cpus).toStdString(), "");
+    EXPECT_EQ(root->findChild("cpus"), nullptr);
+    EXPECT_EQ(tree_->currentItem()->text(0), "/");
+
+    window_->undoStack()->undo();
+    EXPECT_EQ(childNames(root), before);                 // same position
+    EXPECT_EQ(nodeAt(*window_, "/cpus/cpu@0"), cpu0);    // same objects
+    EXPECT_EQ(cpu0->getProperties().size(), 4u);
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/cpus");
+}
+
+TEST_F(GuiTest, RenameNodeUpdatesPaths) {
+    window_->loadDeviceTree(kBoard);
+    auto serial = nodeAt(*window_, "/soc/serial@10000000");
+    ASSERT_EQ(window_->applyRenameNode(serial, "uart@10000000").toStdString(), "");
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc/uart@10000000");
+    EXPECT_TRUE(window_->deviceTree()->findNodeByPath("/soc/uart@10000000"));
+
+    window_->undoStack()->undo();
+    EXPECT_EQ(serial->getName(), "serial@10000000");
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc/serial@10000000");
+}
+
+TEST_F(GuiTest, SetPropertyAddEditRenameAndUndo) {
+    window_->loadDeviceTree(kBoard);
+    auto serial = nodeAt(*window_, "/soc/serial@10000000");
+    const auto original = propNames(serial);
+
+    // Add
+    ASSERT_EQ(window_->applySetProperty(serial, "", "current-speed", "<115200>").toStdString(), "");
+    EXPECT_EQ(propNames(serial).back(), "current-speed");
+    EXPECT_EQ(props_->selectedPropertyName(), "current-speed");
+
+    // Edit keeps position
+    ASSERT_EQ(window_->applySetProperty(serial, "reg", "reg", "<0x10000000 0x2000>").toStdString(), "");
+    EXPECT_EQ(serial->propertyIndex("reg"), 1);
+    EXPECT_EQ(serial->findProperty("reg")->getValueAsCells(), (std::vector<uint32_t>{0x10000000, 0x2000}));
+
+    // Rename keeps position
+    ASSERT_EQ(window_->applySetProperty(serial, "status", "status-x", "\"disabled\"").toStdString(), "");
+    EXPECT_EQ(serial->propertyIndex("status-x"), 4);
+    EXPECT_EQ(window_->undoStack()->undoText(), "Rename property 'status' to 'status-x'");
+
+    // Remove
+    ASSERT_EQ(window_->applyRemoveProperty(serial, "compatible").toStdString(), "");
+    EXPECT_EQ(serial->findProperty("compatible"), nullptr);
+
+    // Undo everything: original names, order and values
+    while (window_->undoStack()->canUndo()) window_->undoStack()->undo();
+    EXPECT_EQ(propNames(serial), original);
+    EXPECT_EQ(serial->findProperty("reg")->getValueAsCells(), (std::vector<uint32_t>{0x10000000, 0x1000}));
+    EXPECT_EQ(serial->findProperty("status")->getValueAsString(), "\"okay\"");
+    EXPECT_FALSE(window_->isModified());
+}
+
+TEST_F(GuiTest, InlineValueEdit) {
+    window_->loadDeviceTree(kBoard);
+    auto cpu0 = nodeAt(*window_, "/cpus/cpu@0");
+    ASSERT_TRUE(window_->applyAddNode(cpu0, "tmp").isEmpty()); // select something under cpu@0
+    window_->undoStack()->undo();                               // selects cpu@0 again
+    ASSERT_EQ(props_->node(), cpu0);
+
+    const int row = cpu0->propertyIndex("clock-frequency");
+    props_->item(row, 2)->setText("<1000000000>"); // what committing an in-place edit does
+    QApplication::processEvents();
+    EXPECT_EQ(cpu0->findProperty("clock-frequency")->getValueAsCells(), std::vector<uint32_t>{1000000000});
+    EXPECT_EQ(props_->item(row, 2)->text(), "<0x3b9aca00>");
+
+    // Invalid input is reverted and explained in the status bar
+    props_->item(row, 2)->setText("<oops>");
+    QApplication::processEvents();
+    EXPECT_EQ(cpu0->findProperty("clock-frequency")->getValueAsCells(), std::vector<uint32_t>{1000000000});
+    EXPECT_EQ(props_->item(row, 2)->text(), "<0x3b9aca00>");
+    EXPECT_NE(window_->statusBar()->currentMessage().indexOf("Invalid value for 'clock-frequency'"), -1);
+}
+
+TEST_F(GuiTest, EditsKeepExpansionAndRefreshSearchAndDiff) {
+    QTemporaryDir dir;
+    window_->loadDeviceTree(kBoard);
+    window_->openDiffFile(kBoard);
+    EXPECT_EQ(window_->findChild<QTableWidget*>("diffTable")->rowCount(), 0);
+
+    auto* cpusItem = findChildItem(tree_->topLevelItem(0), "cpus");
+    cpusItem->setExpanded(true);
+    auto* edit = window_->findChild<QLineEdit*>("findEdit");
+    edit->setText("cpu@");
+
+    ASSERT_TRUE(window_->applyAddNode(nodeAt(*window_, "/cpus"), "cpu@2").isEmpty());
+    EXPECT_TRUE(findChildItem(tree_->topLevelItem(0), "cpus")->isExpanded());
+    EXPECT_EQ(window_->findChild<QLabel*>("findStatus")->text().toStdString(), "3 matches");
+    // The Diff tab is recomputed against the other file
+    EXPECT_EQ(window_->findChild<QTableWidget*>("diffTable")->rowCount(), 1);
+    EXPECT_EQ(window_->findChild<QTableWidget*>("diffTable")->item(0, 1)->text(), "/cpus/cpu@2");
+}
+
+TEST_F(GuiTest, EditActionsFollowSelection) {
+    auto action = [&](const QString& text) { return actionNamed(window_.get(), text); };
+    window_->loadDeviceTree(kBoard);
+    // Root selected: cannot remove or rename it
+    EXPECT_TRUE(action("Add &Node...")->isEnabled());
+    EXPECT_FALSE(action("Remove &Node")->isEnabled());
+    EXPECT_FALSE(action("Re&name Node...")->isEnabled());
+    EXPECT_FALSE(action("&Edit Property...")->isEnabled());
+
+    tree_->setCurrentItem(findChildItem(tree_->topLevelItem(0), "cpus"));
+    EXPECT_TRUE(action("Remove &Node")->isEnabled());
+    props_->selectRow(0);
+    EXPECT_TRUE(action("&Edit Property...")->isEnabled());
+    EXPECT_TRUE(action("Remove &Property")->isEnabled());
+}
+
+TEST_F(GuiTest, SaveActionWritesEditsAndMarksClean) {
+    // Work on a copy so Save (no dialog for a named file) can overwrite it
+    QTemporaryDir dir;
+    const QString file = dir.filePath("board.dts");
+    ASSERT_TRUE(QFile::copy(kBoard, file));
+    window_->loadDeviceTree(file);
+
+    ASSERT_TRUE(window_->applySetProperty(window_->deviceTree()->getRoot(), "model", "model",
+                                          "\"Edited Board\"").isEmpty());
+    ASSERT_TRUE(window_->applyAddNode(nodeAt(*window_, "/soc"), "watchdog@3000").isEmpty());
+    EXPECT_TRUE(window_->isModified());
+
+    actionNamed(window_.get(), "&Save")->trigger();
+    EXPECT_FALSE(window_->isModified());
+    EXPECT_FALSE(window_->windowTitle().endsWith("*"));
+
+    DTE::DeviceTree reloaded;
+    ASSERT_TRUE(reloaded.loadFromFile(file.toStdString())) << reloaded.getLoadError();
+    EXPECT_EQ(reloaded.getRoot()->findProperty("model")->getValueAsString(), "\"Edited Board\"");
+    EXPECT_TRUE(reloaded.findNodeByPath("/soc/watchdog@3000"));
+
+    // Undoing past the save point makes the document modified again
+    window_->undoStack()->undo();
+    EXPECT_TRUE(window_->isModified());
+    window_->undoStack()->setClean(); // avoid the unsaved-changes prompt on teardown
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";
@@ -330,6 +553,20 @@ TEST_F(GuiTest, Screenshot) {
     window_->show();
     QApplication::processEvents();
     EXPECT_TRUE(window_->grab().save(out));
+
+    if (const char* dialogOut = std::getenv("DTE_GUI_SCREENSHOT_DIALOG")) {
+        DTE::PropertyDialog dialog("Edit Property", "/soc/serial@10000000", "reg", "<0x10000000 0x1000",
+                                   [](const QString&, const QString& value) {
+                                       DTE::PropertyValue v;
+                                       std::string error;
+                                       return DTE::parseDtsValue(value.toStdString(), v, &error)
+                                                  ? QString()
+                                                  : QString::fromStdString(error);
+                                   });
+        dialog.show();
+        QApplication::processEvents();
+        EXPECT_TRUE(dialog.grab().save(dialogOut));
+    }
 }
 
 int main(int argc, char** argv) {

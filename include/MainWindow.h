@@ -33,6 +33,8 @@
 #include "DeviceTreeDiff.h"
 #include "PropertyTableWidget.h"
 #include "DiffViewerWidget.h"
+#include "EditCommands.h"
+#include <QUndoStack>
 
 QT_BEGIN_NAMESPACE
 class QAction;
@@ -68,6 +70,23 @@ public:
     // Device tree operations
     void loadDeviceTree(const QString& filename);
     void openDiffFile(const QString& filename);
+
+    // Undoable edits. Each validates its input and returns an error message,
+    // or an empty string after pushing the change onto the undo stack. The
+    // menu/dialog actions are thin wrappers around these.
+    QString applyAddNode(const std::shared_ptr<DeviceTreeNode>& parent, const QString& name);
+    QString applyRemoveNode(const std::shared_ptr<DeviceTreeNode>& node);
+    QString applyRenameNode(const std::shared_ptr<DeviceTreeNode>& node, const QString& newName);
+    // oldName empty adds a property; otherwise replaces (and may rename) it.
+    QString applySetProperty(const std::shared_ptr<DeviceTreeNode>& node, const QString& oldName,
+                             const QString& newName, const QString& valueText);
+    QString applyRemoveProperty(const std::shared_ptr<DeviceTreeNode>& node, const QString& name);
+
+    QUndoStack* undoStack() const { return undoStack_; }
+    std::shared_ptr<DeviceTree> deviceTree() const { return deviceTree_; }
+    // Node of the selected tree item, or nullptr.
+    std::shared_ptr<DeviceTreeNode> selectedNode() const;
+    bool isModified() const { return isModified_; }
     
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -127,6 +146,11 @@ private slots:
     void onTreeItemDoubleClicked(QTreeWidgetItem* item, int column);
     void onPropertyChanged(const QString& propertyName, const QString& newValue);
     void onDiffEntryActivated(const QString& path, const QString& propertyName);
+    void renameNode();
+    void showTreeContextMenu(const QPoint& pos);
+    void showPropertyContextMenu(const QPoint& pos);
+    void onPropertyCellDoubleClicked(int row, int column);
+    void updateEditActions();
     void showHelp();
     
 private:
@@ -154,6 +178,9 @@ private:
     QAction* addPropertyAction_;
     QAction* removePropertyAction_;
     QAction* editPropertyAction_;
+    QAction* renameNodeAction_;
+    QAction* undoAction_;
+    QAction* redoAction_;
     
     QAction* expandAllAction_;
     QAction* collapseAllAction_;
@@ -187,6 +214,9 @@ private:
     // Tree items by node, rebuilt with the tree widget
     QHash<const DeviceTreeNode*, QTreeWidgetItem*> nodeItems_;
     
+    // Undo history of edits to deviceTree_
+    QUndoStack* undoStack_;
+
     // Settings
     QSettings settings_;
     
@@ -199,7 +229,7 @@ private:
     void createDockWidgets();
     void clearDiff();
     
-    void saveDeviceTree(const QString& filename);
+    bool saveDeviceTree(const QString& filename);
     void updateWindowTitle();
     void updateStatusBar();
     void updateTreeWidget();
@@ -210,6 +240,16 @@ private:
     bool saveChanges();
     
     void performSearch();
+    void updateSearchMatches(bool jumpToFirst);
+    QTreeWidgetItem* rebuildTreeItems();
+    void refreshDiff();
+    // Called by edit commands after every redo/undo
+    void onTreeEdited(const std::shared_ptr<DeviceTreeNode>& focus, const QString& property);
+    EditNotify editNotifier();
+    // Error for a property name/value typed by the user, or empty
+    QString validatePropertyInput(const std::shared_ptr<DeviceTreeNode>& node, const QString& oldName,
+                                  const QString& name, const QString& valueText,
+                                  DeviceTreeProperty* parsed = nullptr) const;
     void highlightSearchResult();
     QWidget* createFindBar();
     // Selects the node in the tree (expanding its parents) and, if given,

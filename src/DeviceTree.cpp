@@ -45,6 +45,11 @@ bool DeviceTreeProperty::isString() const {
     return std::holds_alternative<std::string>(value_);
 }
 
+bool DeviceTreeProperty::isEmpty() const {
+    const auto* str = std::get_if<std::string>(&value_);
+    return str && str->empty();
+}
+
 bool DeviceTreeProperty::isStringList() const {
     return std::holds_alternative<StringList>(value_);
 }
@@ -64,7 +69,9 @@ bool DeviceTreeProperty::isCells64() const {
 std::string DeviceTreeProperty::getValueAsString() const {
     std::ostringstream oss;
     
-    if (isString()) {
+    if (isEmpty()) {
+        return {};
+    } else if (isString()) {
         oss << quoteDtsString(std::get<std::string>(value_));
     } else if (isStringList()) {
         const auto& list = std::get<StringList>(value_);
@@ -133,23 +140,57 @@ DeviceTreeNode::DeviceTreeNode(const std::string& name)
     : name_(name) {}
 
 void DeviceTreeNode::addChild(std::shared_ptr<DeviceTreeNode> child) {
-    if (child) {
-        child->parent_ = shared_from_this();
-        children_.push_back(child);
-    }
+    insertChild(children_.size(), std::move(child));
+}
+
+void DeviceTreeNode::insertChild(size_t index, std::shared_ptr<DeviceTreeNode> child) {
+    if (!child) return;
+    child->parent_ = shared_from_this();
+    index = std::min(index, children_.size());
+    children_.insert(children_.begin() + static_cast<std::ptrdiff_t>(index), std::move(child));
 }
 
 void DeviceTreeNode::removeChild(std::shared_ptr<DeviceTreeNode> child) {
     auto it = std::find(children_.begin(), children_.end(), child);
     if (it != children_.end()) {
+        (*it)->parent_.reset();
         children_.erase(it);
     }
 }
 
+int DeviceTreeNode::childIndex(const DeviceTreeNode* child) const {
+    for (size_t i = 0; i < children_.size(); ++i) {
+        if (children_[i].get() == child) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+std::shared_ptr<DeviceTreeNode> DeviceTreeNode::findChild(const std::string& name) const {
+    for (const auto& c : children_) {
+        if (c->getName() == name) return c;
+    }
+    return nullptr;
+}
+
 void DeviceTreeNode::addProperty(const DeviceTreeProperty& property) {
-    // Remove existing property with same name
+    if (auto* existing = findProperty(property.getName())) {
+        *existing = property;
+    } else {
+        properties_.push_back(property);
+    }
+}
+
+void DeviceTreeNode::insertProperty(size_t index, const DeviceTreeProperty& property) {
     removeProperty(property.getName());
-    properties_.push_back(property);
+    index = std::min(index, properties_.size());
+    properties_.insert(properties_.begin() + static_cast<std::ptrdiff_t>(index), property);
+}
+
+int DeviceTreeNode::propertyIndex(const std::string& name) const {
+    for (size_t i = 0; i < properties_.size(); ++i) {
+        if (properties_[i].getName() == name) return static_cast<int>(i);
+    }
+    return -1;
 }
 
 void DeviceTreeNode::removeProperty(const std::string& name) {
@@ -331,9 +372,7 @@ void writeDtsNode(std::ostream& os, const DeviceTreeNode& node, int depth) {
 
     for (const auto& prop : node.getProperties()) {
         os << in << '\t' << prop.getName();
-        const auto* str = std::get_if<std::string>(&prop.getValue());
-        if (!(str && str->empty())) {
-            // An empty string is how empty (boolean) properties are stored.
+        if (!prop.isEmpty()) {
             os << " = " << prop.getValueAsString();
         }
         os << ";\n";

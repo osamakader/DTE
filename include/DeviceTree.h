@@ -34,13 +34,16 @@ public:
     // Type checking methods
     bool isString() const;
     bool isStringList() const;
+    // Zero-length property such as `ranges;` (stored as an empty string)
+    bool isEmpty() const;
     bool isBinary() const;
     bool isCells() const;
     bool isCells64() const;
     
     // Value conversion methods
     // getValueAsString() renders the value in DTS syntax: "escaped",
-    // "a", "b", <0x1 0x2> or [00 11].
+    // "a", "b", <0x1 0x2> or [00 11]; an empty property renders as "" (no
+    // text), since `""` in DTS is a one-byte value.
     std::string getValueAsString() const;
     // The string(s) of a string or string-list property, unescaped;
     // empty for other types.
@@ -71,13 +74,26 @@ public:
     std::shared_ptr<DeviceTreeNode> getParent() const { return parent_.lock(); }
     const std::vector<std::shared_ptr<DeviceTreeNode>>& getChildren() const { return children_; }
     void addChild(std::shared_ptr<DeviceTreeNode> child);
+    // Inserts at `index` (clamped to the end).
+    void insertChild(size_t index, std::shared_ptr<DeviceTreeNode> child);
+    // Removes the child and clears its parent link.
     void removeChild(std::shared_ptr<DeviceTreeNode> child);
+    // Index of a direct child, or -1.
+    int childIndex(const DeviceTreeNode* child) const;
+    std::shared_ptr<DeviceTreeNode> findChild(const std::string& name) const;
     
     // Property management
     const std::vector<DeviceTreeProperty>& getProperties() const { return properties_; }
     size_t getPropertyCount() const { return properties_.size(); }
+    // Adds the property, or replaces the value of an existing property with
+    // the same name in place (as dtc does for duplicate definitions).
     void addProperty(const DeviceTreeProperty& property);
+    // Inserts at `index` (clamped); an existing property with the same name
+    // is removed first.
+    void insertProperty(size_t index, const DeviceTreeProperty& property);
     void removeProperty(const std::string& name);
+    // Index of the named property, or -1.
+    int propertyIndex(const std::string& name) const;
     DeviceTreeProperty* findProperty(const std::string& name);
     const DeviceTreeProperty* findProperty(const std::string& name) const;
     

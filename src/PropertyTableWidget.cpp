@@ -17,9 +17,9 @@ PropertyTableWidget::PropertyTableWidget(QWidget* parent)
     setAlternatingRowColors(true);
     setSelectionBehavior(QAbstractItemView::SelectRows);
     setSelectionMode(QAbstractItemView::SingleSelection);
-    // Read-only until property editing is implemented; accepting edits that
-    // are never applied to the tree would be misleading.
-    setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // Only the value column is editable (see populateTable); edits are
+    // reported through propertyChanged and applied by the owner.
+    setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     
     // Resize columns
     horizontalHeader()->setStretchLastSection(true);
@@ -38,6 +38,14 @@ void PropertyTableWidget::setNode(std::shared_ptr<DeviceTreeNode> node) {
 void PropertyTableWidget::clearNode() {
     currentNode_ = nullptr;
     setRowCount(0);
+}
+
+QString PropertyTableWidget::selectedPropertyName() const {
+    const auto rows = selectionModel() ? selectionModel()->selectedRows() : QModelIndexList();
+    if (rows.isEmpty() || !item(rows.first().row(), 0)) {
+        return {};
+    }
+    return item(rows.first().row(), 0)->text();
 }
 
 bool PropertyTableWidget::selectProperty(const QString& name) {
@@ -73,7 +81,9 @@ void PropertyTableWidget::populateTable() {
         
         // Property type
         QString typeStr;
-        if (prop.isString()) {
+        if (prop.isEmpty()) {
+            typeStr = "Empty";
+        } else if (prop.isString()) {
             typeStr = "String";
         } else if (prop.isStringList()) {
             typeStr = "String list";
@@ -93,6 +103,7 @@ void PropertyTableWidget::populateTable() {
         
         // Property value
         auto valueItem = new QTableWidgetItem(QString::fromStdString(prop.getValueAsString()));
+        valueItem->setToolTip("Double-click to edit (DTS syntax)");
         setItem(i, 2, valueItem);
     }
 }

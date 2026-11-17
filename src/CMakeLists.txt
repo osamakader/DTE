@@ -3,6 +3,7 @@ add_library(dte-core STATIC
     DeviceTree.cpp
     DeviceTreeParser.cpp
     Process.cpp
+    DtsValue.cpp
     DeviceTreeDiff.cpp
 )
 
@@ -16,9 +17,13 @@ add_library(dte-gui STATIC
     DeviceTreeWidgetItem.cpp
     PropertyTableWidget.cpp
     DiffViewerWidget.cpp
+    EditCommands.cpp
+    PropertyDialog.cpp
     ../include/MainWindow.h
     ../include/PropertyTableWidget.h
     ../include/DiffViewerWidget.h
+    ../include/EditCommands.h
+    ../include/PropertyDialog.h
 )
 
 target_link_libraries(dte-gui PUBLIC

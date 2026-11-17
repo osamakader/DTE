@@ -665,8 +665,11 @@ void CLIApp::printTree(const std::shared_ptr<DeviceTreeNode>& node, const std::s
     // Print properties
     auto properties = node->getProperties();
     for (const auto& prop : properties) {
-        std::cout << prefix << "  " << Colors::CYAN << prop.getName() << Colors::RESET 
-                  << " = " << Colors::YELLOW << prop.getValueAsString() << Colors::RESET << "\n";
+        std::cout << prefix << "  " << Colors::CYAN << prop.getName() << Colors::RESET;
+        if (!prop.isEmpty()) {
+            std::cout << " = " << Colors::YELLOW << prop.getValueAsString() << Colors::RESET;
+        }
+        std::cout << "\n";
     }
     
     // Print children
