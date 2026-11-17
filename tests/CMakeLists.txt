@@ -13,6 +13,7 @@ add_executable(dte-tests
     CLITest.cpp
     WriterTest.cpp
     SearchTest.cpp
+    DtsValueTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )
