@@ -39,8 +39,9 @@ endif()
 target_compile_definitions(dte-tests PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
     DTE_CLI_PATH="$<TARGET_FILE:dte-cli>"
+    DTE_GUI_PATH="$<TARGET_FILE:DeviceTreeExplorer>"
 )
-add_dependencies(dte-tests dte-cli)
+add_dependencies(dte-tests dte-cli DeviceTreeExplorer)
 if(DTC_EXECUTABLE)
     target_compile_definitions(dte-tests PRIVATE DTC_PATH="${DTC_EXECUTABLE}")
 endif()

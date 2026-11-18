@@ -36,7 +36,7 @@ target_link_libraries(dte-gui PUBLIC
 
 # Main GUI executable
 add_executable(DeviceTreeExplorer main.cpp)
-target_link_libraries(DeviceTreeExplorer dte-gui)
+target_link_libraries(DeviceTreeExplorer dte-gui dte-cli-app)
 
 # Set output directory
 set_target_properties(DeviceTreeExplorer PROPERTIES

@@ -97,14 +97,25 @@ Launch the graphical interface:
 
 Or with command line options:
 ```bash
-# Open a specific file
-./bin/DeviceTreeExplorer -f device.dtb
+# Open a specific file (-f is optional)
+./bin/DeviceTreeExplorer device.dtb
 
-# Compare with another file
+# Compare with another file (opens the Diff tab)
 ./bin/DeviceTreeExplorer -f base.dtb -d overlay.dtb
+```
 
-# Export to JSON
-./bin/DeviceTreeExplorer -f device.dtb -e json -o output.json
+In the GUI you can browse, search (Ctrl+F), edit nodes and properties with
+undo/redo, compare two trees, validate (Tools > Validate, results in the
+Problems tab) and save as DTS or DTB.
+
+The GUI binary also works headless, without a display:
+```bash
+# Export or validate and exit (same output and exit codes as dte-cli)
+./bin/DeviceTreeExplorer -f device.dts -e json -o output.json
+./bin/DeviceTreeExplorer -f device.dts --validate
+
+# Run any dte-cli command
+./bin/DeviceTreeExplorer --cli diff base.dtb board.dts
 ```
 
 ### CLI Mode
@@ -152,13 +163,19 @@ Display detailed information about a device tree file.
 - File validation status
 
 #### `validate <filename>`
-Validate a device tree file for syntax and structure errors.
+Check a device tree against the Devicetree Specification's structural rules
+(syntax errors are already reported when a DTS file is loaded).
 
-**Features:**
-- Syntax checking
-- Structure validation
-- Property type verification
-- Detailed error reporting
+**Checks:**
+- Node and property names, duplicate sibling nodes
+- Required root properties (`compatible`, `model`, `#address-cells`, `#size-cells`)
+- `reg` length vs the parent's `#address-cells`/`#size-cells`, and unit
+  addresses (`name@addr`) vs the first `reg` address
+- Duplicate or reserved phandles, `interrupt-parent` targets
+- `compatible` and `status` values, aliases pointing to existing nodes
+
+Each issue is printed as `error:` or `warning:` with its node path. Exit
+status is `0` when there are no errors (warnings are allowed), `1` otherwise.
 
 #### `diff <base_file> <overlay_file>`
 Compare two device tree files and show differences. Files may be any mix of

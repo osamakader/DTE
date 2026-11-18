@@ -147,3 +147,57 @@ TEST_F(CLITest, ValidateReportsIssuesAndExitStatus) {
     EXPECT_NE(bad.stdoutData.find("error: /dev@100:reg: has 1 cells"), std::string::npos) << bad.stdoutData;
     EXPECT_NE(bad.stderrData.find("1 error(s), 1 warning(s)"), std::string::npos) << bad.stderrData;
 }
+
+// The GUI binary's headless modes must work without any display.
+class GuiBinaryHeadlessTest : public CLITest {
+protected:
+    DTE::ProcessResult gui(std::vector<std::string> args) {
+        std::vector<std::string> argv{"env", "-u", "DISPLAY", "-u", "WAYLAND_DISPLAY", "QT_QPA_PLATFORM=",
+                                      DTE_GUI_PATH};
+        argv.insert(argv.end(), args.begin(), args.end());
+        return runProcess(argv);
+    }
+};
+
+TEST_F(GuiBinaryHeadlessTest, CliModeForwardsToDteCli) {
+    auto r = gui({"--cli", "list", kData + "/board.dts"});
+    EXPECT_EQ(r.exitCode, 0) << r.stderrData;
+    EXPECT_NE(r.stdoutData.find("compatible = \"acme,widget-board\", \"acme,widget\""), std::string::npos);
+
+    EXPECT_EQ(gui({"--cli", "diff", kData + "/board.dts", "/nonexistent.dts"}).exitCode, 2);
+}
+
+TEST_F(GuiBinaryHeadlessTest, ExportAndValidate) {
+    const std::string out = (tmp_.path() / "o.json").string();
+    auto r = gui({"-f", kData + "/board.dts", "-e", "json", "-o", out});
+    ASSERT_EQ(r.exitCode, 0) << r.stderrData;
+    std::ifstream in(out);
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"model\": \"ACME Widget Board\""), std::string::npos);
+
+    // Positional file and include paths
+    const std::string dts = (tmp_.path() / "flat.dts").string();
+    r = gui({"-I", kData + "/extra-include", kData + "/needs-extra-include.dts", "--export", "dts", "-o", dts});
+    ASSERT_EQ(r.exitCode, 0) << r.stderrData;
+
+    r = gui({kData + "/board.dts", "--validate"});
+    EXPECT_EQ(r.exitCode, 0) << r.stderrData;
+    EXPECT_NE(r.stderrData.find("No problems found"), std::string::npos);
+
+    auto bad = tmp_.write("e.dts", "/dts-v1/;\n/ { dev@1 { reg = <1>; }; };\n");
+    EXPECT_EQ(gui({"-f", bad, "--validate"}).exitCode, 1);
+}
+
+TEST_F(GuiBinaryHeadlessTest, ArgumentErrors) {
+    auto r = gui({"-e", "json"});
+    EXPECT_EQ(r.exitCode, 1);
+    EXPECT_NE(r.stderrData.find("need a file"), std::string::npos) << r.stderrData;
+
+    r = gui({"-f", kData + "/board.dts", "-e", "json"});
+    EXPECT_EQ(r.exitCode, 1);
+    EXPECT_NE(r.stderrData.find("needs an output file"), std::string::npos) << r.stderrData;
+
+    r = gui({"--version"});
+    EXPECT_EQ(r.exitCode, 0);
+    EXPECT_NE(r.stdoutData.find("Device Tree Explorer 1.0.0"), std::string::npos);
+}

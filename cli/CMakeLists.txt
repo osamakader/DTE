@@ -1,15 +1,12 @@
-# Source files for Device Tree Explorer CLI
-set(CLI_SOURCES
-    main.cpp
-    CLIApp.cpp
-)
+# Command-line application, as a library so the GUI binary's --cli mode
+# can reuse it
+add_library(dte-cli-app STATIC CLIApp.cpp)
+target_link_libraries(dte-cli-app PUBLIC dte-core)
 
-# Create the CLI executable
-add_executable(dte-cli ${CLI_SOURCES})
+# dte-cli executable
+add_executable(dte-cli main.cpp)
+target_link_libraries(dte-cli dte-cli-app)
 
-target_link_libraries(dte-cli dte-core)
-
-# Set output directory
 set_target_properties(dte-cli PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
