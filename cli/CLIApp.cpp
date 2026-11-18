@@ -328,8 +328,7 @@ int CLIApp::handleValidate(const std::vector<std::string>& args) {
         return EXIT_FAILURE;
     }
     
-    printValidationResults();
-    return deviceTree_->validate() ? EXIT_SUCCESS : EXIT_FAILURE;
+    return printValidationResults() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 // Exit status follows diff(1): 0 = identical, 1 = different, 2 = error.
@@ -588,19 +587,29 @@ void CLIApp::printDeviceTreeInfo() const {
     }
 }
 
-void CLIApp::printValidationResults() const {
-    if (!deviceTree_) return;
-    
-    std::cout << Colors::BOLD << "Validation Results:" << Colors::RESET << "\n";
-    
-    if (deviceTree_->validate()) {
-        printSuccess("Device tree is valid");
-    } else {
-        printError("Device tree has validation errors:");
-        for (const auto& error : deviceTree_->getValidationErrors()) {
-            std::cout << "  " << Colors::RED << "• " << error << Colors::RESET << "\n";
-        }
+bool CLIApp::printValidationResults() const {
+    if (!deviceTree_) return false;
+
+    const auto issues = deviceTree_->check();
+    size_t errors = 0;
+    for (const auto& issue : issues) {
+        if (issue.isError()) ++errors;
+        const std::string& color = issue.isError() ? Colors::RED : Colors::YELLOW;
+        std::cout << color << Colors::BOLD << (issue.isError() ? "error" : "warning") << Colors::RESET
+                  << ": " << issue.path;
+        if (!issue.property.empty()) std::cout << ":" << Colors::CYAN << issue.property << Colors::RESET;
+        std::cout << ": " << issue.message << "\n";
     }
+
+    const size_t warnings = issues.size() - errors;
+    if (errors == 0 && warnings == 0) {
+        printSuccess("No problems found");
+    } else if (errors == 0) {
+        printSuccess("Valid, with " + std::to_string(warnings) + " warning(s)");
+    } else {
+        printError(std::to_string(errors) + " error(s), " + std::to_string(warnings) + " warning(s)");
+    }
+    return errors == 0;
 }
 
 void CLIApp::printDiffResults(const DeviceTreeDiff& diff) const {

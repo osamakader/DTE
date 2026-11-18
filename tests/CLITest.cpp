@@ -127,3 +127,23 @@ TEST_F(CLITest, ExportWritesDtsAndDtb) {
     EXPECT_NE(r.exitCode, 0);
     EXPECT_NE(r.stderrData.find("Unsupported format"), std::string::npos);
 }
+
+TEST_F(CLITest, ValidateReportsIssuesAndExitStatus) {
+    auto clean = cli({"validate", kData + "/board.dts"});
+    EXPECT_EQ(clean.exitCode, 0) << clean.stdoutData << clean.stderrData;
+    EXPECT_NE(clean.stderrData.find("No problems found"), std::string::npos);
+
+    auto warn = cli({"validate", tmp_.write("w.dts", "/dts-v1/;\n/ { compatible = \"a\"; model = \"m\"; "
+                                                     "#address-cells = <1>; #size-cells = <1>; "
+                                                     "dev@100 { reg = <0x200 0x10>; }; };\n")});
+    EXPECT_EQ(warn.exitCode, 0); // warnings only
+    EXPECT_NE(warn.stdoutData.find("warning: /dev@100: unit address '100' does not match the first reg address (0x200)"),
+              std::string::npos) << warn.stdoutData;
+
+    auto bad = cli({"validate", tmp_.write("e.dts", "/dts-v1/;\n/ { compatible = \"a\"; model = \"m\"; "
+                                                    "#address-cells = <1>; #size-cells = <1>; "
+                                                    "dev@100 { reg = <0x100>; status = \"on\"; }; };\n")});
+    EXPECT_EQ(bad.exitCode, 1);
+    EXPECT_NE(bad.stdoutData.find("error: /dev@100:reg: has 1 cells"), std::string::npos) << bad.stdoutData;
+    EXPECT_NE(bad.stderrData.find("1 error(s), 1 warning(s)"), std::string::npos) << bad.stderrData;
+}

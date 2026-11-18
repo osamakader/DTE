@@ -1172,16 +1172,16 @@ void MainWindow::validate() {
         showError("Validation", "No device tree loaded");
         return;
     }
-    
-    if (deviceTree_->validate()) {
-        showSuccess("Validation", "Device tree is valid");
-    } else {
-        QString errors;
-        for (const auto& error : deviceTree_->getValidationErrors()) {
-            errors += QString::fromStdString(error) + "\n";
-        }
-        showError("Validation", "Device tree has errors:\n" + errors);
+    const auto issues = deviceTree_->check();
+    if (issues.empty()) {
+        showSuccess("Validation", "No problems found");
+        return;
     }
+    QString text;
+    for (const auto& issue : issues) {
+        text += QString::fromStdString(issue.toString()) + "\n";
+    }
+    showError("Validation", text);
 }
 
 void MainWindow::showInfo(const QString& title, const QString& message) {

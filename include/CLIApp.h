@@ -44,7 +44,8 @@ private:
     void printVersion() const;
     void printHelp(const std::string& command = "") const;
     void printDeviceTreeInfo() const;
-    void printValidationResults() const;
+    // Prints check() results; returns true if there are no errors.
+    bool printValidationResults() const;
     void printDiffResults(const DeviceTreeDiff& diff) const;
     void printTree(const std::shared_ptr<DeviceTreeNode>& node, const std::string& prefix = "") const;
 

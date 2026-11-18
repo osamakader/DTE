@@ -118,6 +118,19 @@ struct MemoryReservation {
     bool operator==(const MemoryReservation&) const = default;
 };
 
+// A problem found by DeviceTree::check()
+struct ValidationIssue {
+    enum class Severity { Error, Warning };
+    Severity severity;
+    std::string path;      // node path
+    std::string property;  // empty for node-level issues
+    std::string message;
+
+    bool isError() const { return severity == Severity::Error; }
+    // "error: /path:property: message"
+    std::string toString() const;
+};
+
 // Options for DeviceTree::search
 struct SearchOptions {
     bool properties = false;     // also match property names and values
@@ -166,9 +179,13 @@ public:
     uint32_t getBootCpuId() const { return bootCpuId_; }
     void setBootCpuId(uint32_t id) { bootCpuId_ = id; }
 
-    // Validation
+    // Validation against the Devicetree Specification's structural rules
+    // (names, required root properties, reg vs #address-cells/#size-cells
+    // and unit addresses, phandles, status, compatible, aliases). Issues are
+    // returned in tree order. No dtc needed.
+    std::vector<ValidationIssue> check() const;
+    // True if check() finds no errors (warnings are allowed).
     bool validate() const;
-    std::vector<std::string> getValidationErrors() const;
     
     // DTS source accepted by dtc, and an FDT v17 blob. Both work without
     // dtc. Note that a DTB does not record value types, so reading it back
@@ -196,7 +213,6 @@ private:
     std::string loadError_;
     std::vector<MemoryReservation> memoryReservations_;
     uint32_t bootCpuId_ = 0;
-    mutable std::vector<std::string> validationErrors_;
 };
 
 } // namespace DTE

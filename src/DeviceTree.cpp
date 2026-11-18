@@ -539,25 +539,6 @@ std::vector<uint8_t> DeviceTree::exportAsDTB() const {
     return w.finish(memoryReservations_, bootCpuId_);
 }
 
-bool DeviceTree::validate() const {
-    validationErrors_.clear();
-    
-    if (!root_) {
-        validationErrors_.push_back("No root node");
-        return false;
-    }
-    
-    // Basic validation - check for required properties
-    if (!root_->findProperty("compatible")) {
-        validationErrors_.push_back("Root node missing 'compatible' property");
-    }
-    
-    return validationErrors_.empty();
-}
-
-std::vector<std::string> DeviceTree::getValidationErrors() const {
-    return validationErrors_;
-}
 
 // JSON / YAML export
 //
