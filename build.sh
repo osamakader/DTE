@@ -136,44 +136,26 @@ build_project() {
 
 # Function to run tests
 run_tests() {
-    print_status "Running basic tests..."
-    
-    if [ ! -f "build/bin/dte-cli" ]; then
-        print_error "CLI executable not found. Please build the project first."
+    if [ ! -d "build" ]; then
+        print_error "Build directory not found. Please build the project first."
         exit 1
     fi
-    
-    # Test CLI version
-    print_status "Testing CLI version..."
-    if ./build/bin/dte-cli --version; then
-        print_success "CLI version test passed"
+
+    print_status "Running test suite (ctest)..."
+    if ctest --test-dir build --output-on-failure; then
+        print_success "Test suite passed"
     else
-        print_error "CLI version test failed"
+        print_error "Test suite failed"
         exit 1
     fi
-    
-    # Test CLI help
-    print_status "Testing CLI help..."
-    if ./build/bin/dte-cli --help > /dev/null; then
-        print_success "CLI help test passed"
+
+    print_status "Running CLI smoke test..."
+    if ./test_cli.sh build/bin/dte-cli; then
+        print_success "All tests passed!"
     else
-        print_error "CLI help test failed"
+        print_error "CLI smoke test failed"
         exit 1
     fi
-    
-    # Test if /proc/device-tree exists and is readable
-    if [ -d "/proc/device-tree" ]; then
-        print_status "Testing with /proc/device-tree..."
-        if ./build/bin/dte-cli info /proc/device-tree > /dev/null 2>&1; then
-            print_success "Device tree info test passed"
-        else
-            print_warning "Device tree info test failed (this is normal if not running on a device with device tree)"
-        fi
-    else
-        print_warning "/proc/device-tree not found (this is normal on non-device-tree systems)"
-    fi
-    
-    print_success "All tests completed!"
 }
 
 # Function to install
@@ -220,7 +202,7 @@ show_help() {
     echo "Options:"
     echo "  build [type]     Build the project (default: Release)"
     echo "  debug            Build in debug mode"
-    echo "  test             Run basic tests"
+    echo "  test             Run the test suite (ctest) and the CLI smoke test"
     echo "  install          Install the project"
     echo "  clean            Clean build directory"
     echo "  deps             Check dependencies"
