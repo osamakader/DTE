@@ -50,6 +50,7 @@ MainWindow::MainWindow(QWidget* parent)
     , propertyTable_(nullptr)
     , sourceView_(nullptr)
     , diffViewer_(nullptr)
+    , problemsTable_(nullptr)
     , statusBar_(nullptr)
     , progressBar_(nullptr)
     , statusLabel_(nullptr)
@@ -94,6 +95,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(propertyTable_, &QWidget::customContextMenuRequested, this, &MainWindow::showPropertyContextMenu);
     connect(propertyTable_, &QTableWidget::cellDoubleClicked, this, &MainWindow::onPropertyCellDoubleClicked);
     connect(propertyTable_, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateEditActions);
+    connect(problemsTable_, &QTableWidget::cellDoubleClicked, this, &MainWindow::onProblemDoubleClicked);
     updateEditActions();
 }
 
@@ -365,6 +367,21 @@ void MainWindow::createCentralWidget() {
     // Diff tab
     diffViewer_ = new DiffViewerWidget();
     detailTabs_->addTab(diffViewer_, "Diff");
+
+    // Problems tab (Tools > Validate)
+    problemsTable_ = new QTableWidget(0, 4);
+    problemsTable_->setObjectName("problemsTable");
+    problemsTable_->setHorizontalHeaderLabels({"Severity", "Path", "Property", "Message"});
+    problemsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    problemsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    problemsTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    problemsTable_->setAlternatingRowColors(true);
+    problemsTable_->verticalHeader()->setVisible(false);
+    problemsTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    problemsTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    problemsTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    problemsTable_->horizontalHeader()->setStretchLastSection(true);
+    detailTabs_->addTab(problemsTable_, "Problems");
     
     // Left pane: find bar above the tree
     auto* leftPane = new QWidget();
@@ -897,6 +914,7 @@ void MainWindow::onTreeEdited(const std::shared_ptr<DeviceTreeNode>& focus, cons
     updateStatusBar();
     updateSearchMatches(false);
     refreshDiff();
+    if (problemsShown_) updateProblems();
     updateEditActions();
 }
 
@@ -938,6 +956,9 @@ void MainWindow::loadDeviceTree(const QString& filename) {
     deviceTree_ = tree;
     currentFile_ = filename;
     clearDiff();
+    problemsShown_ = false;
+    problemsTable_->setRowCount(0);
+    detailTabs_->setTabText(detailTabs_->indexOf(problemsTable_), "Problems");
     undoStack_->clear();
     setModified(false);
     updateTreeWidget();
@@ -1172,16 +1193,53 @@ void MainWindow::validate() {
         showError("Validation", "No device tree loaded");
         return;
     }
+    problemsShown_ = true;
+    const int errors = updateProblems();
+    const int total = problemsTable_->rowCount();
+    detailTabs_->setCurrentWidget(problemsTable_);
+    statusBar()->showMessage(total == 0 ? QString("Validation: no problems found")
+                                        : QString("Validation: %1 error(s), %2 warning(s)")
+                                              .arg(errors)
+                                              .arg(total - errors),
+                             8000);
+}
+
+int MainWindow::updateProblems() {
+    problemsTable_->setRowCount(0);
+    if (!deviceTree_) {
+        detailTabs_->setTabText(detailTabs_->indexOf(problemsTable_), "Problems");
+        return 0;
+    }
     const auto issues = deviceTree_->check();
-    if (issues.empty()) {
-        showSuccess("Validation", "No problems found");
-        return;
+    problemsTable_->setRowCount(static_cast<int>(issues.size()));
+    int errors = 0;
+    QFont bold = problemsTable_->font();
+    bold.setBold(true);
+    for (int i = 0; i < static_cast<int>(issues.size()); ++i) {
+        const auto& issue = issues[i];
+        if (issue.isError()) ++errors;
+        auto* sev = new QTableWidgetItem(issue.isError() ? "Error" : "Warning");
+        sev->setForeground(issue.isError() ? QColor(0xd3, 0x2f, 0x2f) : QColor(0xe0, 0x7b, 0x00));
+        sev->setFont(bold);
+        problemsTable_->setItem(i, 0, sev);
+        problemsTable_->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(issue.path)));
+        problemsTable_->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(issue.property)));
+        auto* msg = new QTableWidgetItem(QString::fromStdString(issue.message));
+        msg->setToolTip(msg->text());
+        problemsTable_->setItem(i, 3, msg);
     }
-    QString text;
-    for (const auto& issue : issues) {
-        text += QString::fromStdString(issue.toString()) + "\n";
+    const int index = detailTabs_->indexOf(problemsTable_);
+    detailTabs_->setTabText(index, issues.empty() ? QString("Problems") : QString("Problems (%1)").arg(issues.size()));
+    return errors;
+}
+
+void MainWindow::onProblemDoubleClicked(int row, int /*column*/) {
+    if (!deviceTree_) return;
+    const QString path = problemsTable_->item(row, 1)->text();
+    const QString prop = problemsTable_->item(row, 2)->text();
+    if (auto node = deviceTree_->findNodeByPath(path.toStdString())) {
+        selectNode(node, prop);
     }
-    showError("Validation", text);
 }
 
 void MainWindow::showInfo(const QString& title, const QString& message) {
@@ -1204,6 +1262,9 @@ void MainWindow::newFile() {
     deviceTree_ = std::make_shared<DeviceTree>();
     currentFile_.clear();
     clearDiff();
+    problemsShown_ = false;
+    problemsTable_->setRowCount(0);
+    detailTabs_->setTabText(detailTabs_->indexOf(problemsTable_), "Problems");
     undoStack_->clear();
     setModified(false);
     updateTreeWidget();

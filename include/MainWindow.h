@@ -151,6 +151,7 @@ private slots:
     void showPropertyContextMenu(const QPoint& pos);
     void onPropertyCellDoubleClicked(int row, int column);
     void updateEditActions();
+    void onProblemDoubleClicked(int row, int column);
     void showHelp();
     
 private:
@@ -161,6 +162,8 @@ private:
     PropertyTableWidget* propertyTable_;
     QTextEdit* sourceView_;
     DiffViewerWidget* diffViewer_;
+    QTableWidget* problemsTable_;
+    bool problemsShown_ = false;
     
     QStatusBar* statusBar_;
     QProgressBar* progressBar_;
@@ -243,6 +246,9 @@ private:
     void updateSearchMatches(bool jumpToFirst);
     QTreeWidgetItem* rebuildTreeItems();
     void refreshDiff();
+    // Fills the Problems tab from DeviceTree::check(); returns the number
+    // of errors.
+    int updateProblems();
     // Called by edit commands after every redo/undo
     void onTreeEdited(const std::shared_ptr<DeviceTreeNode>& focus, const QString& property);
     EditNotify editNotifier();

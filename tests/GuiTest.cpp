@@ -539,6 +539,37 @@ TEST_F(GuiTest, SaveActionWritesEditsAndMarksClean) {
     window_->undoStack()->setClean(); // avoid the unsaved-changes prompt on teardown
 }
 
+TEST_F(GuiTest, ValidateFillsProblemsTabAndNavigates) {
+    window_->loadDeviceTree(kBoard);
+    auto* problems = window_->findChild<QTableWidget*>("problemsTable");
+    auto* tabs = window_->findChild<QTabWidget*>();
+    ASSERT_TRUE(problems && tabs);
+
+    actionNamed(window_.get(), "&Validate")->trigger();
+    EXPECT_EQ(tabs->currentWidget(), problems);
+    EXPECT_EQ(problems->rowCount(), 0);
+    EXPECT_NE(window_->statusBar()->currentMessage().indexOf("no problems found"), -1);
+
+    // An edit that breaks reg is reported right away, while the tab is in use
+    auto serial = nodeAt(*window_, "/soc/serial@10000000");
+    ASSERT_TRUE(window_->applySetProperty(serial, "reg", "reg", "<0x10000000>").isEmpty());
+    ASSERT_EQ(problems->rowCount(), 1);
+    EXPECT_EQ(problems->item(0, 0)->text(), "Error");
+    EXPECT_EQ(problems->item(0, 1)->text(), "/soc/serial@10000000");
+    EXPECT_EQ(problems->item(0, 2)->text(), "reg");
+    EXPECT_EQ(tabs->tabText(tabs->indexOf(problems)), "Problems (1)");
+
+    // Double-click jumps to the node and property
+    tree_->setCurrentItem(tree_->topLevelItem(0));
+    emit problems->cellDoubleClicked(0, 3);
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/soc/serial@10000000");
+    EXPECT_EQ(props_->selectedPropertyName(), "reg");
+
+    window_->undoStack()->undo();
+    EXPECT_EQ(problems->rowCount(), 0);
+    EXPECT_EQ(tabs->tabText(tabs->indexOf(problems)), "Problems");
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";
