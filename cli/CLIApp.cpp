@@ -203,6 +203,13 @@ void CLIApp::setupCommands() {
     listCmd.usage = "list <filename> [path]";
     listCmd.handler = [this](const std::vector<std::string>& args) { return handleList(args); };
     commands_["list"] = listCmd;
+
+    CLICommand refsCmd;
+    refsCmd.name = "refs";
+    refsCmd.description = "Show phandle references (all, or from/to one node)";
+    refsCmd.usage = "refs <filename> [path]";
+    refsCmd.handler = [this](const std::vector<std::string>& args) { return handleRefs(args); };
+    commands_["refs"] = refsCmd;
     
     CLICommand helpCmd;
     helpCmd.name = "help";
@@ -276,6 +283,13 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "  dtb     - Device Tree Blob (built-in writer, no dtc needed)\n";
         std::cout << "\n'" << programName_ << " convert' instead uses dtc, which keeps dtc's own\n";
         std::cout << "formatting (labels, value grouping) when decompiling.\n";
+    } else if (command == "refs") {
+        std::cout << "\nReferences are decoded from properties that hold phandles (interrupt-parent,\n";
+        std::cout << "clocks, gpios and *-gpios, resets, dmas, interrupts-extended, pinctrl-N, ...),\n";
+        std::cout << "using the target's #...-cells for the argument cells.\n";
+        std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
+        std::cout << "  " << programName_ << " refs board.dtb\n";
+        std::cout << "  " << programName_ << " refs board.dtb /soc/interrupt-controller@1000\n";
     } else if (command == "convert") {
         std::cout << "\nThe input format is detected from the file contents; the output\n";
         std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
@@ -705,3 +719,73 @@ void CLIApp::printInfo(const std::string& message) const {
 }
 
 } // namespace DTE 
+namespace DTE {
+
+namespace {
+
+std::string formatReference(const PhandleReference& r, bool withSource) {
+    std::ostringstream os;
+    if (withSource) os << r.source->getFullPath() << ":";
+    os << r.property << " -> ";
+    if (!r.problem.empty()) {
+        os << "(" << r.problem << ")";
+        return os.str();
+    }
+    os << r.target->getFullPath();
+    if (!r.args.empty()) {
+        os << " <" << std::hex;
+        for (size_t i = 0; i < r.args.size(); ++i) os << (i ? " " : "") << "0x" << r.args[i];
+        os << ">" << std::dec;
+    }
+    return os.str();
+}
+
+} // namespace
+
+int CLIApp::handleRefs(const std::vector<std::string>& args) {
+    if (args.empty() || args.size() > 2) {
+        printError("Usage: " + commands_["refs"].usage);
+        return EXIT_FAILURE;
+    }
+    if (!fileExists(args[0])) {
+        printError("File not found: " + args[0]);
+        return EXIT_FAILURE;
+    }
+    printInfo("Loading device tree from: " + args[0]);
+    if (!loadDeviceTree(args[0])) {
+        return EXIT_FAILURE;
+    }
+
+    const auto refs = deviceTree_->references();
+    auto print = [&](const PhandleReference& r, bool withSource) {
+        const bool broken = !r.problem.empty();
+        std::cout << "  " << (broken ? Colors::RED : "") << formatReference(r, withSource)
+                  << (broken ? Colors::RESET : "") << "\n";
+    };
+
+    if (args.size() == 1) {
+        std::cout << Colors::BOLD << "References (" << refs.size() << "):" << Colors::RESET << "\n";
+        for (const auto& r : refs) print(r, true);
+        return EXIT_SUCCESS;
+    }
+
+    auto node = deviceTree_->findNodeByPath(args[1]);
+    if (!node) {
+        printError("Node not found: " + args[1]);
+        return EXIT_FAILURE;
+    }
+    std::vector<PhandleReference> from, to;
+    for (const auto& r : refs) {
+        if (r.source == node) from.push_back(r);
+        if (r.target == node) to.push_back(r);
+    }
+    std::cout << Colors::BOLD << node->getFullPath() << " refers to (" << from.size() << "):" << Colors::RESET << "\n";
+    for (const auto& r : from) print(r, false);
+    std::cout << Colors::BOLD << node->getFullPath() << " is referenced by (" << to.size() << "):" << Colors::RESET << "\n";
+    for (const auto& r : to) {
+        std::cout << "  " << r.source->getFullPath() << ":" << r.property << "\n";
+    }
+    return EXIT_SUCCESS;
+}
+
+} // namespace DTE

@@ -239,6 +239,18 @@ List the structure of a device tree.
 - Optional path filtering
 - Hierarchical output
 
+#### `refs <filename> [path]`
+Show phandle references. Without a path, lists every reference in the tree
+(`source:property -> target <argument cells>`), with broken ones explained.
+With a path, shows what that node refers to and which nodes refer to it.
+
+References are decoded from the properties that hold phandles
+(`interrupt-parent`, `clocks`, `gpios`/`*-gpios`, `resets`, `dmas`,
+`interrupts-extended`, `pinctrl-N`, ...) using the target's `#...-cells`.
+`validate` reports references that do not resolve. In the GUI, the property
+table's "Refers to" column and the "Referenced by" list show the same
+information and let you jump between nodes.
+
 ## Examples
 
 ### Basic Device Tree Analysis

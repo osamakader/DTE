@@ -201,3 +201,22 @@ TEST_F(GuiBinaryHeadlessTest, ArgumentErrors) {
     EXPECT_EQ(r.exitCode, 0);
     EXPECT_NE(r.stdoutData.find("Device Tree Explorer 1.0.0"), std::string::npos);
 }
+
+TEST_F(CLITest, RefsCommand) {
+    const std::string file = kData + "/refs.dts";
+    auto all = cli({"refs", file});
+    ASSERT_EQ(all.exitCode, 0) << all.stderrData;
+    EXPECT_NE(all.stdoutData.find("References (7):"), std::string::npos) << all.stdoutData;
+    EXPECT_NE(all.stdoutData.find("/serial@4000:clocks -> /clock-controller@2000 <0x3>"), std::string::npos);
+
+    auto one = cli({"refs", file, "/interrupt-controller@1000"});
+    ASSERT_EQ(one.exitCode, 0);
+    EXPECT_NE(one.stdoutData.find("is referenced by (2):\n  /:interrupt-parent\n  /serial@4000:interrupts-extended"),
+              std::string::npos) << one.stdoutData;
+
+    auto broken = cli({"refs", tmp_.write("b.dts", "/dts-v1/;\n/ { dev { clocks = <0x42 1>; }; };\n")});
+    EXPECT_NE(broken.stdoutData.find("/dev:clocks -> (refers to phandle 0x42, which no node has)"), std::string::npos)
+        << broken.stdoutData;
+
+    EXPECT_EQ(cli({"refs", file, "/nope"}).exitCode, 1);
+}
