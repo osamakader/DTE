@@ -12,7 +12,13 @@ class PropertyTableWidget : public QTableWidget {
     
 public:
     PropertyTableWidget(QWidget* parent = nullptr);
-    void setNode(std::shared_ptr<DeviceTreeNode> node);
+    // `references` are the decoded phandle references held by the node's
+    // properties; they fill the "Refers to" column.
+    void setNode(std::shared_ptr<DeviceTreeNode> node, std::vector<PhandleReference> references = {});
+
+    enum Column { NameColumn, TypeColumn, ValueColumn, ReferencesColumn };
+    // Path of the first resolved target of the property in `row`, or empty.
+    QString referenceTarget(int row) const;
     void clearNode();
     // Selects and scrolls to the row of the named property, if present.
     bool selectProperty(const QString& name);
@@ -28,6 +34,7 @@ private slots:
     
 private:
     std::shared_ptr<DeviceTreeNode> currentNode_;
+    std::vector<PhandleReference> references_;
     void populateTable();
 };
 

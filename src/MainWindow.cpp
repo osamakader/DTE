@@ -96,6 +96,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(propertyTable_, &QTableWidget::cellDoubleClicked, this, &MainWindow::onPropertyCellDoubleClicked);
     connect(propertyTable_, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateEditActions);
     connect(problemsTable_, &QTableWidget::cellDoubleClicked, this, &MainWindow::onProblemDoubleClicked);
+    connect(referencedByList_, &QListWidget::itemActivated, this, &MainWindow::onReferencedByActivated);
     updateEditActions();
 }
 
@@ -354,9 +355,25 @@ void MainWindow::createCentralWidget() {
     // Create detail tabs
     detailTabs_ = new QTabWidget();
     
-    // Properties tab
+    // Properties tab: the property table, and below it the nodes that
+    // reference the selected node through phandles
     propertyTable_ = new PropertyTableWidget();
-    detailTabs_->addTab(propertyTable_, "Properties");
+    referencedByLabel_ = new QLabel("Referenced by:");
+    referencedByList_ = new QListWidget();
+    referencedByList_->setObjectName("referencedByList");
+    referencedByList_->setToolTip("Nodes that refer to the selected node; double-click to go there");
+    auto* referencedByBox = new QWidget();
+    auto* referencedByLayout = new QVBoxLayout(referencedByBox);
+    referencedByLayout->setContentsMargins(0, 4, 0, 0);
+    referencedByLayout->addWidget(referencedByLabel_);
+    referencedByLayout->addWidget(referencedByList_);
+    auto* propertiesSplitter = new QSplitter(Qt::Vertical);
+    propertiesSplitter->addWidget(propertyTable_);
+    propertiesSplitter->addWidget(referencedByBox);
+    propertiesSplitter->setStretchFactor(0, 4);
+    propertiesSplitter->setStretchFactor(1, 1);
+    propertiesPage_ = propertiesSplitter;
+    detailTabs_->addTab(propertiesPage_, "Properties");
     
     // Source tab
     sourceView_ = new QTextEdit();
@@ -763,8 +780,17 @@ void MainWindow::onPropertyChanged(const QString& propertyName, const QString& n
 }
 
 void MainWindow::onPropertyCellDoubleClicked(int row, int column) {
+    if (row < 0) return;
+    if (column == PropertyTableWidget::ReferencesColumn) {
+        // Follow the reference
+        const QString target = propertyTable_->referenceTarget(row);
+        if (!target.isEmpty() && deviceTree_) {
+            selectNode(deviceTree_->findNodeByPath(target.toStdString()));
+        }
+        return;
+    }
     // The value column edits in place; elsewhere open the dialog.
-    if (column != 2 && row >= 0) {
+    if (column != PropertyTableWidget::ValueColumn) {
         editProperty();
     }
 }
@@ -1047,12 +1073,37 @@ void MainWindow::updateTreeWidget() {
 }
 
 void MainWindow::updatePropertyTable() {
+    referencedByList_->clear();
     auto* item = dynamic_cast<DeviceTreeWidgetItem*>(treeWidget_->currentItem());
-    if (!item || !item->isSelected()) {
+    if (!item || !item->isSelected() || !deviceTree_) {
         propertyTable_->clearNode();
+        referencedByLabel_->setText("Referenced by:");
         return;
     }
-    propertyTable_->setNode(item->getNode());
+    const auto node = item->getNode();
+
+    std::vector<PhandleReference> from;
+    int incoming = 0;
+    for (auto& ref : deviceTree_->references()) {
+        if (ref.source == node) from.push_back(ref);
+        if (ref.target == node) {
+            auto* entry = new QListWidgetItem(QString("%1 : %2").arg(QString::fromStdString(ref.source->getFullPath()),
+                                                                     QString::fromStdString(ref.property)));
+            entry->setData(Qt::UserRole, QString::fromStdString(ref.source->getFullPath()));
+            entry->setData(Qt::UserRole + 1, QString::fromStdString(ref.property));
+            referencedByList_->addItem(entry);
+            ++incoming;
+        }
+    }
+    referencedByLabel_->setText(incoming == 0 ? QString("Referenced by: no other node")
+                                              : QString("Referenced by %1:").arg(incoming));
+    propertyTable_->setNode(node, std::move(from));
+}
+
+void MainWindow::onReferencedByActivated(QListWidgetItem* item) {
+    if (!item || !deviceTree_) return;
+    auto node = deviceTree_->findNodeByPath(item->data(Qt::UserRole).toString().toStdString());
+    selectNode(node, item->data(Qt::UserRole + 1).toString());
 }
 
 void MainWindow::updateSourceView() {
@@ -1140,7 +1191,7 @@ bool MainWindow::selectNode(const std::shared_ptr<DeviceTreeNode>& node, const Q
     treeWidget_->setCurrentItem(item);
     treeWidget_->scrollToItem(item);
     if (!propertyName.isEmpty()) {
-        detailTabs_->setCurrentWidget(propertyTable_);
+        detailTabs_->setCurrentWidget(propertiesPage_);
         propertyTable_->selectProperty(propertyName);
     }
     return true;
@@ -1286,7 +1337,7 @@ void MainWindow::showTreeView() {
 }
 
 void MainWindow::showPropertyView() {
-    detailTabs_->setCurrentWidget(propertyTable_);
+    detailTabs_->setCurrentWidget(propertiesPage_);
 }
 
 void MainWindow::showSourceView() {

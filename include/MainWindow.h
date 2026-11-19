@@ -28,6 +28,7 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QHash>
+#include <QListWidget>
 
 #include "DeviceTree.h"
 #include "DeviceTreeDiff.h"
@@ -152,6 +153,7 @@ private slots:
     void onPropertyCellDoubleClicked(int row, int column);
     void updateEditActions();
     void onProblemDoubleClicked(int row, int column);
+    void onReferencedByActivated(QListWidgetItem* item);
     void showHelp();
     
 private:
@@ -160,6 +162,9 @@ private:
     QTreeWidget* treeWidget_;
     QTabWidget* detailTabs_;
     PropertyTableWidget* propertyTable_;
+    QWidget* propertiesPage_ = nullptr;   // property table + "Referenced by"
+    QLabel* referencedByLabel_ = nullptr;
+    QListWidget* referencedByList_ = nullptr;
     QTextEdit* sourceView_;
     DiffViewerWidget* diffViewer_;
     QTableWidget* problemsTable_;

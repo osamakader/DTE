@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QListWidget>
 #include <QUndoStack>
 #include <QTemporaryDir>
 #include <QFile>
@@ -570,14 +571,62 @@ TEST_F(GuiTest, ValidateFillsProblemsTabAndNavigates) {
     EXPECT_EQ(tabs->tabText(tabs->indexOf(problems)), "Problems");
 }
 
+TEST_F(GuiTest, PropertyTableShowsAndFollowsReferences) {
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/refs.dts");
+    auto serial = nodeAt(*window_, "/serial@4000");
+    ASSERT_TRUE(serial);
+    tree_->setCurrentItem(findChildItem(tree_->topLevelItem(0), "serial@4000"));
+
+    const int clocksRow = serial->propertyIndex("clocks");
+    const int col = PropertyTableWidget::ReferencesColumn;
+    EXPECT_EQ(props_->item(clocksRow, col)->text().toStdString(), "/clock-controller@2000 <0x3>; /oscillator");
+    EXPECT_EQ(props_->item(serial->propertyIndex("reset-gpios"), col)->text().toStdString(),
+              "/gpio@3000 <0x5 0x1>; /gpio@3000 <0x7 0x0>");
+    EXPECT_TRUE(props_->item(serial->propertyIndex("reg"), col)->text().isEmpty());
+
+    // Double-clicking the reference goes to its (first) target
+    emit props_->cellDoubleClicked(clocksRow, col);
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/clock-controller@2000");
+}
+
+TEST_F(GuiTest, ReferencedByListNavigates) {
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/refs.dts");
+    auto* list = window_->findChild<QListWidget*>("referencedByList");
+    ASSERT_TRUE(list);
+
+    tree_->setCurrentItem(findChildItem(tree_->topLevelItem(0), "interrupt-controller@1000"));
+    ASSERT_EQ(list->count(), 2);
+    EXPECT_EQ(list->item(0)->text(), "/ : interrupt-parent");
+    EXPECT_EQ(list->item(1)->text(), "/serial@4000 : interrupts-extended");
+
+    emit list->itemActivated(list->item(1));
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/serial@4000");
+    EXPECT_EQ(props_->selectedPropertyName(), "interrupts-extended");
+    EXPECT_EQ(list->count(), 0); // nothing refers to the serial node
+}
+
+TEST_F(GuiTest, BrokenReferenceIsFlaggedAfterEdit) {
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/refs.dts");
+    auto serial = nodeAt(*window_, "/serial@4000");
+    ASSERT_TRUE(window_->applySetProperty(serial, "clocks", "clocks", "<0x99>").isEmpty());
+    const QString text = props_->item(serial->propertyIndex("clocks"), PropertyTableWidget::ReferencesColumn)->text();
+    EXPECT_TRUE(text.startsWith("⚠ refers to phandle 0x99")) << text.toStdString();
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";
 
-    window_->loadDeviceTree(kBoard);
+    const char* file = std::getenv("DTE_GUI_SCREENSHOT_FILE");
+    const char* select = std::getenv("DTE_GUI_SCREENSHOT_SELECT");
+    window_->loadDeviceTree(file ? QString(file) : kBoard);
     tree_->expandAll();
     auto* root = tree_->topLevelItem(0);
-    tree_->setCurrentItem(findChildItem(findChildItem(root, "soc"), "serial@10000000"));
+    if (select) {
+        window_->findChild<QLineEdit*>("findEdit")->setText(select);
+    } else {
+        tree_->setCurrentItem(findChildItem(findChildItem(root, "soc"), "serial@10000000"));
+    }
     if (const char* other = std::getenv("DTE_GUI_SCREENSHOT_DIFF")) {
         window_->openDiffFile(other);
     }

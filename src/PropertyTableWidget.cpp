@@ -3,6 +3,7 @@
 #include <QTableWidgetItem>
 #include <QMessageBox>
 #include <QSignalBlocker>
+#include <QColor>
 
 namespace DTE {
 
@@ -10,8 +11,8 @@ PropertyTableWidget::PropertyTableWidget(QWidget* parent)
     : QTableWidget(parent), currentNode_(nullptr) {
     
     // Set up table
-    setColumnCount(3);
-    setHorizontalHeaderLabels({"Property", "Type", "Value"});
+    setColumnCount(4);
+    setHorizontalHeaderLabels({"Property", "Type", "Value", "Refers to"});
     
     // Set table properties
     setAlternatingRowColors(true);
@@ -22,21 +23,29 @@ PropertyTableWidget::PropertyTableWidget(QWidget* parent)
     setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     
     // Resize columns
-    horizontalHeader()->setStretchLastSection(true);
-    horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    horizontalHeader()->setSectionResizeMode(NameColumn, QHeaderView::ResizeToContents);
+    horizontalHeader()->setSectionResizeMode(TypeColumn, QHeaderView::ResizeToContents);
+    horizontalHeader()->setSectionResizeMode(ValueColumn, QHeaderView::Stretch);
+    horizontalHeader()->setSectionResizeMode(ReferencesColumn, QHeaderView::ResizeToContents);
     
     // Connect signals
     connect(this, &QTableWidget::itemChanged, this, &PropertyTableWidget::onItemChanged);
 }
 
-void PropertyTableWidget::setNode(std::shared_ptr<DeviceTreeNode> node) {
+void PropertyTableWidget::setNode(std::shared_ptr<DeviceTreeNode> node, std::vector<PhandleReference> references) {
     currentNode_ = node;
+    references_ = std::move(references);
     populateTable();
+}
+
+QString PropertyTableWidget::referenceTarget(int row) const {
+    auto* it = item(row, ReferencesColumn);
+    return it ? it->data(Qt::UserRole).toString() : QString();
 }
 
 void PropertyTableWidget::clearNode() {
     currentNode_ = nullptr;
+    references_.clear();
     setRowCount(0);
 }
 
@@ -104,7 +113,36 @@ void PropertyTableWidget::populateTable() {
         // Property value
         auto valueItem = new QTableWidgetItem(QString::fromStdString(prop.getValueAsString()));
         valueItem->setToolTip("Double-click to edit (DTS syntax)");
-        setItem(i, 2, valueItem);
+        setItem(i, ValueColumn, valueItem);
+
+        // Phandle references held by this property
+        QStringList targets;
+        QString firstTarget;
+        bool broken = false;
+        for (const auto& ref : references_) {
+            if (ref.property != prop.getName()) continue;
+            if (!ref.problem.empty()) {
+                targets << QString("⚠ %1").arg(QString::fromStdString(ref.problem));
+                broken = true;
+                continue;
+            }
+            QString text = QString::fromStdString(ref.target->getFullPath());
+            if (!ref.args.empty()) {
+                QStringList args;
+                for (auto a : ref.args) args << QString("0x%1").arg(a, 0, 16);
+                text += " <" + args.join(' ') + ">";
+            }
+            targets << text;
+            if (firstTarget.isEmpty()) firstTarget = QString::fromStdString(ref.target->getFullPath());
+        }
+        auto refItem = new QTableWidgetItem(targets.join("; "));
+        refItem->setFlags(refItem->flags() & ~Qt::ItemIsEditable);
+        refItem->setData(Qt::UserRole, firstTarget);
+        if (!targets.isEmpty()) {
+            refItem->setToolTip(targets.join("\n") + (firstTarget.isEmpty() ? "" : "\n\nDouble-click to go to the target"));
+        }
+        if (broken) refItem->setForeground(QColor(0xd3, 0x2f, 0x2f));
+        setItem(i, ReferencesColumn, refItem);
     }
 }
 
@@ -116,7 +154,7 @@ void PropertyTableWidget::onItemChanged(QTableWidgetItem* item) {
     int row = item->row();
     int column = item->column();
     
-    if (column == 2) { // Value column
+    if (column == ValueColumn) {
         QString propertyName = this->item(row, 0)->text();
         QString newValue = item->text();
         
