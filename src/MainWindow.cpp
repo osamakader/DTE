@@ -550,8 +550,39 @@ void MainWindow::addNode() {
     if (!error.isEmpty()) showError("Add Node", error);
 }
 
+QStringList MainWindow::incomingReferences(const std::shared_ptr<DeviceTreeNode>& node, bool subtree) const {
+    QStringList out;
+    if (!deviceTree_ || !node) return out;
+    for (const auto& ref : deviceTree_->referencesTo(node, subtree)) {
+        out << QString("%1 : %2 -> %3")
+                   .arg(QString::fromStdString(ref.source->getFullPath()), QString::fromStdString(ref.property),
+                        QString::fromStdString(ref.target->getFullPath()));
+    }
+    return out;
+}
+
+namespace {
+// Asks whether to go ahead although `refs` would be left dangling.
+bool confirmDanglingReferences(QWidget* parent, const QString& title, const QString& what, const QStringList& refs) {
+    if (refs.isEmpty()) return true;
+    QStringList shown = refs.mid(0, 10);
+    if (refs.size() > shown.size()) shown << QString("... and %1 more").arg(refs.size() - shown.size());
+    return QMessageBox::question(parent, title,
+                                 QString("%1 is referenced by:\n\n%2\n\nThese references will point to "
+                                         "nothing. Continue?")
+                                     .arg(what, shown.join('\n')),
+                                 QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes;
+}
+} // namespace
+
 void MainWindow::removeNode() {
-    const QString error = applyRemoveNode(selectedNode());
+    auto node = selectedNode();
+    if (node && !confirmDanglingReferences(this, "Remove Node",
+                                           QString("%1 (or a node below it)").arg(QString::fromStdString(node->getFullPath())),
+                                           incomingReferences(node, true))) {
+        return;
+    }
+    const QString error = applyRemoveNode(node);
     if (!error.isEmpty()) showError("Remove Node", error);
 }
 
@@ -588,7 +619,13 @@ void MainWindow::removeProperty() {
         showError("Remove Property", "Select a property first");
         return;
     }
-    const QString error = applyRemoveProperty(propertyTable_->node(), name);
+    auto node = propertyTable_->node();
+    if ((name == "phandle" || name == "linux,phandle") && node &&
+        !confirmDanglingReferences(this, "Remove Property", QString::fromStdString(node->getFullPath()),
+                                   incomingReferences(node, false))) {
+        return;
+    }
+    const QString error = applyRemoveProperty(node, name);
     if (!error.isEmpty()) showError("Remove Property", error);
 }
 

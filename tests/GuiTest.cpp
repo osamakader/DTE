@@ -613,6 +613,16 @@ TEST_F(GuiTest, BrokenReferenceIsFlaggedAfterEdit) {
     EXPECT_TRUE(text.startsWith("⚠ refers to phandle 0x99")) << text.toStdString();
 }
 
+TEST_F(GuiTest, IncomingReferencesForRemovalWarnings) {
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/refs.dts");
+    auto pinmux = nodeAt(*window_, "/pinmux");
+    // The child is referenced, so removing the parent would break it
+    EXPECT_TRUE(window_->incomingReferences(pinmux, false).isEmpty());
+    EXPECT_EQ(window_->incomingReferences(pinmux, true),
+              QStringList{"/serial@4000 : pinctrl-0 -> /pinmux/uart"});
+    EXPECT_TRUE(window_->incomingReferences(nodeAt(*window_, "/serial@4000"), true).isEmpty());
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";

@@ -88,6 +88,10 @@ public:
     // Node of the selected tree item, or nullptr.
     std::shared_ptr<DeviceTreeNode> selectedNode() const;
     bool isModified() const { return isModified_; }
+    // "source : property" for every reference into `node` (and, with
+    // subtree, its descendants) from outside that subtree. Used to warn
+    // before edits that would leave them dangling.
+    QStringList incomingReferences(const std::shared_ptr<DeviceTreeNode>& node, bool subtree) const;
     
 protected:
     void closeEvent(QCloseEvent* event) override;
