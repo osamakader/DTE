@@ -1,0 +1,49 @@
+/dts-v1/;
+
+/ {
+	compatible = "acme,refs";
+	model = "Reference test board";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&gic>;
+
+	gic: interrupt-controller@1000 {
+		compatible = "arm,gic-400";
+		reg = <0x1000 0x100>;
+		interrupt-controller;
+		#interrupt-cells = <3>;
+	};
+
+	clk: clock-controller@2000 {
+		reg = <0x2000 0x100>;
+		#clock-cells = <1>;
+	};
+
+	osc: oscillator {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+
+	gpio0: gpio@3000 {
+		reg = <0x3000 0x100>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		nr-gpios = <32>;
+	};
+
+	pinmux {
+		uart_pins: uart {
+			pins = "a", "b";
+		};
+	};
+
+	serial@4000 {
+		reg = <0x4000 0x100>;
+		clocks = <&clk 3>, <&osc>;
+		clock-names = "baud", "apb";
+		interrupts-extended = <&gic 0 33 4>;
+		pinctrl-0 = <&uart_pins>;
+		reset-gpios = <&gpio0 5 1>, <0>, <&gpio0 7 0>;
+	};
+};

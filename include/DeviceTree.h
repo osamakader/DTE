@@ -118,6 +118,21 @@ struct MemoryReservation {
     bool operator==(const MemoryReservation&) const = default;
 };
 
+// One phandle reference found in a property, e.g. one entry of
+// `clocks = <&clk 3>, <&clk 4>;` (target &clk, args {3}).
+struct PhandleReference {
+    std::shared_ptr<DeviceTreeNode> source; // node holding the property
+    std::string property;
+    size_t cellIndex = 0;                   // position of the phandle cell
+    uint32_t phandle = 0;
+    std::shared_ptr<DeviceTreeNode> target; // nullptr if it does not resolve
+    std::vector<uint32_t> args;             // specifier cells after the phandle
+    // Set when the entry could not be decoded (unknown phandle, missing
+    // #...-cells on the target, truncated list); decoding of the property
+    // stops at such an entry.
+    std::string problem;
+};
+
 // A problem found by DeviceTree::check()
 struct ValidationIssue {
     enum class Severity { Error, Warning };
@@ -184,6 +199,21 @@ public:
     // and unit addresses, phandles, status, compatible, aliases). Issues are
     // returned in tree order. No dtc needed.
     std::vector<ValidationIssue> check() const;
+
+    // Phandles. Nodes are found through their `phandle` (or legacy
+    // `linux,phandle`) property.
+    std::shared_ptr<DeviceTreeNode> findNodeByPhandle(uint32_t phandle) const;
+    // All references in properties known to hold phandles (interrupt-parent,
+    // clocks, gpios / *-gpios, resets, dmas, interrupts-extended, pinctrl-N,
+    // ... as in dtc), decoded with the target's #...-cells. Tree order.
+    std::vector<PhandleReference> references() const;
+    // References whose target is `node`, or (withDescendants) any node in
+    // its subtree, made from outside that subtree.
+    std::vector<PhandleReference> referencesTo(const std::shared_ptr<DeviceTreeNode>& node,
+                                               bool withDescendants = false) const;
+    // Decoded references held by one property (empty if it holds none).
+    std::vector<PhandleReference> referencesIn(const std::shared_ptr<DeviceTreeNode>& node,
+                                               const std::string& property) const;
     // True if check() finds no errors (warnings are allowed).
     bool validate() const;
     
