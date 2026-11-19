@@ -160,6 +160,25 @@ TEST(Validation, InterruptParentMustResolve) {
                               "error: /:interrupt-parent: refers to phandle 0x7, which no node has"}));
 }
 
+TEST(Validation, BrokenReferencesInAnyKnownProperty) {
+    Fixture f;
+    auto clk = node("clock-controller@2000");
+    set(clk, "reg", Cells{0x2000, 0x100});
+    set(clk, "phandle", Cells{2});
+    set(clk, "#clock-cells", Cells{1});
+    f.soc->addChild(clk);
+    set(f.uart, "clocks", Cells{2}); // missing the clock specifier
+    set(f.uart, "reset-gpios", Cells{9, 1, 0});
+    EXPECT_EQ(f.issues(), (std::vector<std::string>{
+                              "error: /soc/serial@10000000:clocks: is truncated: /soc/clock-controller@2000 needs 1 "
+                              "argument cell(s) after the phandle",
+                              "error: /soc/serial@10000000:reset-gpios: refers to phandle 0x9, which no node has",
+                          }));
+    set(f.uart, "clocks", Cells{2, 5});
+    f.uart->removeProperty("reset-gpios");
+    EXPECT_EQ(f.issues(), std::vector<std::string>{});
+}
+
 TEST(Validation, CompatibleAndStatusValues) {
     Fixture f;
     set(f.uart, "compatible", Cells{1});

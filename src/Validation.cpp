@@ -28,7 +28,12 @@ constexpr uint32_t kDefaultSizeCells = 1;
 
 class Checker {
 public:
-    std::vector<ValidationIssue> run(const std::shared_ptr<DeviceTreeNode>& root) {
+    std::vector<ValidationIssue> run(const DeviceTree& tree) {
+        const auto root = tree.getRoot();
+        // Problems found while decoding phandle references, by source node
+        for (auto& ref : tree.references()) {
+            if (!ref.problem.empty()) referenceProblems_.emplace(ref.source.get(), ref);
+        }
         if (!root) {
             error("/", "", "Tree has no root node");
             return issues_;
@@ -43,6 +48,7 @@ private:
     std::vector<ValidationIssue> issues_;
     std::map<uint32_t, std::string> phandles_; // value -> first node path
     std::shared_ptr<DeviceTreeNode> root_;
+    std::multimap<const DeviceTreeNode*, PhandleReference> referenceProblems_;
 
     void add(ValidationIssue::Severity sev, const std::string& path, const std::string& prop,
              const std::string& msg) {
@@ -132,7 +138,7 @@ private:
         if (parent) checkReg(path, n, *parent);
         checkCompatible(path, n);
         checkStatus(path, n);
-        checkInterruptParent(path, n);
+        checkReferences(path, n);
         if (parent && !parent->getParent() && n.getName() == "aliases") checkAliases(path, n);
 
         for (const auto& child : n.getChildren()) visit(child);
@@ -230,14 +236,11 @@ private:
         }
     }
 
-    void checkInterruptParent(const std::string& path, const DeviceTreeNode& n) {
-        const auto* p = n.findProperty("interrupt-parent");
-        if (!p) return;
-        uint32_t v = 0;
-        if (!singleCell(p, v)) {
-            error(path, "interrupt-parent", "must be a single phandle cell");
-        } else if (!phandles_.count(v)) {
-            error(path, "interrupt-parent", "refers to phandle 0x" + hex(v) + ", which no node has");
+    // interrupt-parent, clocks, gpios, ... (see DeviceTree::references)
+    void checkReferences(const std::string& path, const DeviceTreeNode& n) {
+        auto [begin, end] = referenceProblems_.equal_range(&n);
+        for (auto it = begin; it != end; ++it) {
+            error(path, it->second.property, it->second.problem);
         }
     }
 
@@ -264,7 +267,7 @@ private:
 } // namespace
 
 std::vector<ValidationIssue> DeviceTree::check() const {
-    return Checker().run(root_);
+    return Checker().run(*this);
 }
 
 bool DeviceTree::validate() const {

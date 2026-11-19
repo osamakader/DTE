@@ -142,3 +142,11 @@ TEST_F(BrokenReferences, UnknownPropertiesAreNotReferences) {
     dev->addProperty(DeviceTreeProperty("ngpios", Cells{1}));
     EXPECT_TRUE(tree.references().empty());
 }
+
+#ifdef DTC_PATH
+TEST_F(ReferencesFromDts, FixtureValidatesCleanly) {
+    std::vector<std::string> issues;
+    for (const auto& i : tree_.check()) issues.push_back(i.toString());
+    EXPECT_EQ(issues, std::vector<std::string>{});
+}
+#endif

@@ -196,8 +196,9 @@ public:
 
     // Validation against the Devicetree Specification's structural rules
     // (names, required root properties, reg vs #address-cells/#size-cells
-    // and unit addresses, phandles, status, compatible, aliases). Issues are
-    // returned in tree order. No dtc needed.
+    // and unit addresses, phandles and phandle references, status,
+    // compatible, aliases). Issues are returned in tree order. No dtc
+    // needed.
     std::vector<ValidationIssue> check() const;
 
     // Phandles. Nodes are found through their `phandle` (or legacy
