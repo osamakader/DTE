@@ -78,3 +78,26 @@ TEST(Node, InsertPropertyAndIndex) {
     EXPECT_EQ(propNames(*n), (std::vector<std::string>{"d", "a", "b", "c"}));
     EXPECT_EQ(n->findProperty("d")->getValueAsCells(), std::vector<uint32_t>{40});
 }
+
+TEST(Node, CloneIsDeepAndDetached) {
+    auto root = node("/");
+    auto child = node("child");
+    child->addProperty(cell("a", 1));
+    root->addChild(child);
+    child->addChild(node("grandchild"));
+
+    auto copy = root->clone();
+    EXPECT_EQ(copy->getParent(), nullptr);
+    ASSERT_EQ(copy->getChildren().size(), 1u);
+    auto copiedChild = copy->getChildren()[0];
+    EXPECT_NE(copiedChild, child);
+    EXPECT_EQ(copiedChild->getParent(), copy);
+    EXPECT_EQ(copiedChild->getFullPath(), "/child");
+    EXPECT_EQ(copiedChild->getChildren()[0]->getFullPath(), "/child/grandchild");
+
+    // Changing the copy leaves the original alone
+    copiedChild->addProperty(cell("a", 2));
+    copiedChild->addChild(node("extra"));
+    EXPECT_EQ(child->findProperty("a")->getValueAsCells(), std::vector<uint32_t>{1});
+    EXPECT_EQ(child->getChildren().size(), 1u);
+}

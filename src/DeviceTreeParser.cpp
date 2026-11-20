@@ -452,6 +452,7 @@ bool DTSParser::compile(const std::string& filename, std::string& blob) {
     }
 
     std::vector<std::string> argv{dtcExecutable(), "-I", "dts", "-O", "dtb"};
+    if (symbols_) argv.push_back("-@");
     for (const auto& d : searchDirs) {
         argv.push_back("-i");
         argv.push_back(d);

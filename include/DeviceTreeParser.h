@@ -63,6 +63,8 @@ public:
     // /include/ (dtc). The source file's directory and its include/
     // subdirectory are always searched first.
     void setIncludePaths(std::vector<std::string> paths) { includePaths_ = std::move(paths); }
+    // Compile with `dtc -@` (emit __symbols__; see LoadOptions::symbols).
+    void setSymbols(bool symbols) { symbols_ = symbols; }
     const std::vector<std::string>& includePaths() const { return includePaths_; }
 
     // True if the file uses C preprocessor directives (#include, #define,
@@ -72,6 +74,7 @@ public:
 private:
     std::string lastWarnings_;
     std::vector<std::string> includePaths_;
+    bool symbols_ = false;
 };
 
 // Parser factory

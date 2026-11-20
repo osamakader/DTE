@@ -353,3 +353,19 @@ TEST_F(DTSParserTest, DtbToDtsReportsErrors) {
     EXPECT_FALSE(DTE::DeviceTreeUtils::dtbToDts(bad, (tmp_.path() / "o.dts").string(), &error));
     EXPECT_FALSE(error.empty());
 }
+
+TEST_F(DTSParserTest, SymbolsOptionAddsSymbolsNode) {
+    DeviceTree plain, withSymbols;
+    ASSERT_TRUE(plain.loadFromFile(kData + "/board.dts"));
+    DTE::LoadOptions options;
+    options.symbols = true;
+    ASSERT_TRUE(withSymbols.loadFromFile(kData + "/board.dts", options)) << withSymbols.getLoadError();
+
+    EXPECT_FALSE(plain.findNodeByPath("/__symbols__"));
+    auto symbols = withSymbols.findNodeByPath("/__symbols__");
+    ASSERT_TRUE(symbols);
+    EXPECT_EQ(rawString(withSymbols, "/__symbols__", "uart0"), "/soc/serial@10000000");
+    // Labelled nodes get phandles even when nothing refers to them
+    EXPECT_TRUE(findProp(withSymbols, "/soc/serial@10000000", "phandle"));
+    EXPECT_FALSE(findProp(plain, "/soc/serial@10000000", "phandle"));
+}

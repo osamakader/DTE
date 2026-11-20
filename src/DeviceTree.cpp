@@ -165,6 +165,15 @@ int DeviceTreeNode::childIndex(const DeviceTreeNode* child) const {
     return -1;
 }
 
+std::shared_ptr<DeviceTreeNode> DeviceTreeNode::clone() const {
+    auto copy = std::make_shared<DeviceTreeNode>(name_);
+    copy->properties_ = properties_;
+    for (const auto& child : children_) {
+        copy->addChild(child->clone());
+    }
+    return copy;
+}
+
 std::shared_ptr<DeviceTreeNode> DeviceTreeNode::findChild(const std::string& name) const {
     for (const auto& c : children_) {
         if (c->getName() == name) return c;
@@ -322,6 +331,7 @@ bool DeviceTree::loadFromFile(const std::string& filename, const LoadOptions& op
     
     if (auto* dts = dynamic_cast<DTSParser*>(parser.get())) {
         dts->setIncludePaths(options.includePaths);
+        dts->setSymbols(options.symbols);
     }
     
     auto parsedTree = parser->parse(filename);

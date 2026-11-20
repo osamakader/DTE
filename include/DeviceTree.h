@@ -81,6 +81,8 @@ public:
     // Index of a direct child, or -1.
     int childIndex(const DeviceTreeNode* child) const;
     std::shared_ptr<DeviceTreeNode> findChild(const std::string& name) const;
+    // Deep copy of this node and its subtree (the copy has no parent).
+    std::shared_ptr<DeviceTreeNode> clone() const;
     
     // Property management
     const std::vector<DeviceTreeProperty>& getProperties() const { return properties_; }
@@ -163,6 +165,9 @@ struct SearchMatch {
 struct LoadOptions {
     // Extra include directories for DTS sources (#include and /include/)
     std::vector<std::string> includePaths;
+    // Compile DTS with `dtc -@`: adds a __symbols__ node (label -> path) and
+    // gives every labelled node a phandle. Needed to apply overlays.
+    bool symbols = false;
 };
 
 // Device tree
