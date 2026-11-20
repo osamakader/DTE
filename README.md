@@ -105,7 +105,8 @@ Or with command line options:
 ```
 
 In the GUI you can browse, search (Ctrl+F), edit nodes and properties with
-undo/redo, compare two trees, validate (Tools > Validate, results in the
+undo/redo, follow phandle references, compare two trees, apply overlays
+(Tools > Apply Overlay, undoable), validate (Tools > Validate, results in the
 Problems tab) and save as DTS or DTB.
 
 The GUI binary also works headless, without a display:

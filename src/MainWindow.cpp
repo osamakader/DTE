@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "DeviceTreeParser.h"
 #include "DtsValue.h"
+#include "Overlay.h"
 #include "PropertyDialog.h"
 
 #include <functional>
@@ -224,6 +225,10 @@ void MainWindow::createActions() {
     diffAction_->setStatusTip("Compare with another device tree");
     connect(diffAction_, &QAction::triggered, this, static_cast<void (MainWindow::*)()>(&MainWindow::openDiffFile));
     
+    applyOverlayAction_ = new QAction("Apply &Overlay...", this);
+    applyOverlayAction_->setStatusTip("Apply a device tree overlay (.dtbo or .dtso) to the open tree");
+    connect(applyOverlayAction_, &QAction::triggered, this, &MainWindow::applyOverlay);
+
     validateAction_ = new QAction(QIcon(":/icons/validate.png"), "&Validate", this);
     validateAction_->setStatusTip("Validate the current device tree");
     connect(validateAction_, &QAction::triggered, this, &MainWindow::validate);
@@ -286,6 +291,7 @@ void MainWindow::createMenus() {
     QMenu* toolsMenu = menuBar()->addMenu("&Tools");
     toolsMenu->addAction(diffAction_);
     toolsMenu->addAction("&Export Diff...", this, &MainWindow::exportDiff);
+    toolsMenu->addAction(applyOverlayAction_);
     toolsMenu->addAction(validateAction_);
     
     // Help menu
@@ -1135,6 +1141,50 @@ void MainWindow::updatePropertyTable() {
     referencedByLabel_->setText(incoming == 0 ? QString("Referenced by: no other node")
                                               : QString("Referenced by %1:").arg(incoming));
     propertyTable_->setNode(node, std::move(from));
+}
+
+void MainWindow::applyOverlay() {
+    if (!deviceTree_) {
+        showError("Apply Overlay", "Open a device tree first");
+        return;
+    }
+    const QString file = QFileDialog::getOpenFileName(this, "Apply Overlay", QString(),
+                                                      "Overlays (*.dtbo *.dtso);;All Files (*)");
+    if (file.isEmpty()) return;
+    const QString error = applyOverlayFile(file);
+    if (!error.isEmpty()) showError("Apply Overlay", error);
+}
+
+QString MainWindow::applyOverlayFile(const QString& filename) {
+    if (!deviceTree_ || !deviceTree_->getRoot()) return "No device tree loaded";
+
+    DeviceTree overlay;
+    std::string error;
+    if (!loadOverlay(overlay, filename.toStdString(), {}, &error)) {
+        return QString::fromStdString(error);
+    }
+
+    // Apply to a copy; the undo command swaps between the two roots
+    DeviceTree result = *deviceTree_;
+    result.setRoot(deviceTree_->getRoot()->clone());
+    SymbolMap labels = baseSymbolsFor(*deviceTree_, currentFile_.toStdString());
+    if (!DTE::applyOverlay(result, overlay, &error, &labels)) {
+        return QString::fromStdString(error);
+    }
+
+    auto before = std::make_shared<DeviceTree>(*deviceTree_);
+    auto after = std::make_shared<DeviceTree>(result);
+    DeviceTreeDiff diff(before, after);
+    const QString name = QFileInfo(filename).fileName();
+    undoStack_->push(new ReplaceRootCommand(*deviceTree_, result.getRoot(), QString("Apply overlay '%1'").arg(name),
+                                            editNotifier()));
+    statusBar()->showMessage(QString("Applied %1: %2 added, %3 modified, %4 removed")
+                                 .arg(name)
+                                 .arg(diff.getAddedCount())
+                                 .arg(diff.getModifiedCount())
+                                 .arg(diff.getRemovedCount()),
+                             8000);
+    return {};
 }
 
 void MainWindow::onReferencedByActivated(QListWidgetItem* item) {

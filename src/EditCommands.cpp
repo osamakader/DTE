@@ -131,4 +131,22 @@ void RemovePropertyCommand::undo() {
     callNotify(notify_, node_, property_.getName());
 }
 
+// ReplaceRootCommand
+
+ReplaceRootCommand::ReplaceRootCommand(DeviceTree& tree, std::shared_ptr<DeviceTreeNode> newRoot,
+                                       const QString& text, EditNotify notify)
+    : tree_(tree), oldRoot_(tree.getRoot()), newRoot_(std::move(newRoot)), notify_(std::move(notify)) {
+    setText(text);
+}
+
+void ReplaceRootCommand::redo() {
+    tree_.setRoot(newRoot_);
+    callNotify(notify_, newRoot_);
+}
+
+void ReplaceRootCommand::undo() {
+    tree_.setRoot(oldRoot_);
+    callNotify(notify_, oldRoot_);
+}
+
 } // namespace DTE

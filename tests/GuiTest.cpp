@@ -623,6 +623,44 @@ TEST_F(GuiTest, IncomingReferencesForRemovalWarnings) {
     EXPECT_TRUE(window_->incomingReferences(nodeAt(*window_, "/serial@4000"), true).isEmpty());
 }
 
+TEST_F(GuiTest, ApplyOverlayIsOneUndoableStep) {
+    const QString dir = QString(TEST_DATA_DIR) + "/overlay";
+    window_->loadDeviceTree(dir + "/base.dts");
+    auto* stack = window_->undoStack();
+
+    // An edit before the overlay
+    ASSERT_TRUE(window_->applyAddNode(window_->deviceTree()->getRoot(), "before").isEmpty());
+    auto beforeRoot = window_->deviceTree()->getRoot();
+
+    ASSERT_EQ(window_->applyOverlayFile(dir + "/overlay.dtso").toStdString(), "");
+    EXPECT_EQ(stack->undoText(), "Apply overlay 'overlay.dtso'");
+    EXPECT_TRUE(window_->deviceTree()->findNodeByPath("/soc/sensor@4000"));
+    EXPECT_TRUE(window_->deviceTree()->findNodeByPath("/before")); // earlier edit kept
+    EXPECT_NE(window_->statusBar()->currentMessage().indexOf("Applied overlay.dtso"), -1);
+    EXPECT_TRUE(findChildItem(findChildItem(tree_->topLevelItem(0), "soc"), "sensor@4000"));
+    EXPECT_TRUE(source_->toPlainText().contains("sensor@4000 {"));
+
+    stack->undo();
+    EXPECT_EQ(window_->deviceTree()->getRoot(), beforeRoot);
+    EXPECT_FALSE(window_->deviceTree()->findNodeByPath("/soc/sensor@4000"));
+    stack->undo(); // the edit made before the overlay still undoes cleanly
+    EXPECT_FALSE(window_->deviceTree()->findNodeByPath("/before"));
+    EXPECT_FALSE(window_->isModified());
+
+    stack->redo();
+    stack->redo();
+    EXPECT_TRUE(window_->deviceTree()->findNodeByPath("/soc/sensor@4000"));
+    stack->setClean();
+}
+
+TEST_F(GuiTest, ApplyOverlayErrorsLeaveTreeUnchanged) {
+    window_->loadDeviceTree(kBoard);
+    auto root = window_->deviceTree()->getRoot();
+    EXPECT_NE(window_->applyOverlayFile(kBoard).indexOf("is not an overlay"), -1);
+    EXPECT_EQ(window_->deviceTree()->getRoot(), root);
+    EXPECT_EQ(window_->undoStack()->count(), 0);
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";

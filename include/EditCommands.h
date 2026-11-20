@@ -90,4 +90,21 @@ private:
     EditNotify notify_;
 };
 
+// Replaces the whole tree (e.g. with the result of applying an overlay);
+// undo puts the previous root object back, so commands recorded earlier
+// still refer to the nodes they edited.
+class ReplaceRootCommand : public QUndoCommand {
+public:
+    ReplaceRootCommand(DeviceTree& tree, std::shared_ptr<DeviceTreeNode> newRoot, const QString& text,
+                       EditNotify notify);
+    void redo() override;
+    void undo() override;
+
+private:
+    DeviceTree& tree_;
+    std::shared_ptr<DeviceTreeNode> oldRoot_;
+    std::shared_ptr<DeviceTreeNode> newRoot_;
+    EditNotify notify_;
+};
+
 } // namespace DTE

@@ -82,6 +82,8 @@ public:
     QString applySetProperty(const std::shared_ptr<DeviceTreeNode>& node, const QString& oldName,
                              const QString& newName, const QString& valueText);
     QString applyRemoveProperty(const std::shared_ptr<DeviceTreeNode>& node, const QString& name);
+    // Applies an overlay file (.dtbo/.dtso) as one undoable step.
+    QString applyOverlayFile(const QString& filename);
 
     QUndoStack* undoStack() const { return undoStack_; }
     std::shared_ptr<DeviceTree> deviceTree() const { return deviceTree_; }
@@ -158,6 +160,7 @@ private slots:
     void updateEditActions();
     void onProblemDoubleClicked(int row, int column);
     void onReferencedByActivated(QListWidgetItem* item);
+    void applyOverlay();
     void showHelp();
     
 private:
@@ -202,6 +205,7 @@ private:
     
     QAction* diffAction_;
     QAction* validateAction_;
+    QAction* applyOverlayAction_ = nullptr;
     
     QAction* aboutAction_;
     QAction* aboutQtAction_;
