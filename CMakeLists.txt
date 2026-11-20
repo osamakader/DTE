@@ -22,6 +22,10 @@ else()
     message(STATUS "Install device-tree-compiler package for full functionality")
 endif()
 
+# fdtoverlay (also from the device-tree-compiler package) is used by the
+# tests to cross-check overlay application
+find_program(FDTOVERLAY_EXECUTABLE fdtoverlay)
+
 # Set compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2")
 

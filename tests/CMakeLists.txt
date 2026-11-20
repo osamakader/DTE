@@ -17,6 +17,7 @@ add_executable(dte-tests
     NodeTest.cpp
     ValidationTest.cpp
     ReferencesTest.cpp
+    OverlayTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )
@@ -45,6 +46,9 @@ target_compile_definitions(dte-tests PRIVATE
 add_dependencies(dte-tests dte-cli DeviceTreeExplorer)
 if(DTC_EXECUTABLE)
     target_compile_definitions(dte-tests PRIVATE DTC_PATH="${DTC_EXECUTABLE}")
+endif()
+if(FDTOVERLAY_EXECUTABLE)
+    target_compile_definitions(dte-tests PRIVATE FDTOVERLAY_PATH="${FDTOVERLAY_EXECUTABLE}")
 endif()
 
 include(GoogleTest)

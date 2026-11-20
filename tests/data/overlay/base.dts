@@ -1,0 +1,34 @@
+/dts-v1/;
+
+/ {
+	compatible = "acme,base";
+	model = "Overlay base";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&gic>;
+
+	gic: interrupt-controller@1000 {
+		compatible = "arm,gic-400";
+		reg = <0x1000 0x100>;
+		interrupt-controller;
+		#interrupt-cells = <3>;
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		clk: clock-controller@2000 {
+			reg = <0x2000 0x100>;
+			#clock-cells = <1>;
+		};
+
+		uart0: serial@3000 {
+			compatible = "ns16550a";
+			reg = <0x3000 0x100>;
+			status = "disabled";
+		};
+	};
+};

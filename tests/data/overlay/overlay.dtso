@@ -1,0 +1,34 @@
+/dts-v1/;
+/plugin/;
+
+/* Override an existing node through its label */
+&uart0 {
+	status = "okay";
+	clocks = <&clk 3>;
+};
+
+/* Add nodes under a path; the new node refers to itself and to the base */
+&{/soc} {
+	sensor: sensor@4000 {
+		compatible = "acme,sensor";
+		reg = <0x4000 0x100>;
+		interrupts-extended = <&gic 0 40 4>;
+		self = <&sensor>;
+		#thermal-sensor-cells = <0>;
+	};
+
+	thermal {
+		thermal-sensors = <&sensor>;
+	};
+};
+
+/* An explicit fragment with target-path */
+/ {
+	fragment@9 {
+		target-path = "/";
+		__overlay__ {
+			overlaid;
+			model = "Overlay base + sensor";
+		};
+	};
+};
