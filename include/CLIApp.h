@@ -36,6 +36,7 @@ private:
     int handleSearch(const std::vector<std::string>& args);
     int handleList(const std::vector<std::string>& args);
     int handleRefs(const std::vector<std::string>& args);
+    int handleOverlay(const std::vector<std::string>& args);
     int handleHelp(const std::vector<std::string>& args);
 
     // Utility methods

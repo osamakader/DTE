@@ -25,17 +25,29 @@ bool isOverlay(const DeviceTree& tree);
 //  1. the overlay's phandles are renumbered above the base's highest one,
 //     and references inside the overlay (__local_fixups__) adjusted;
 //  2. references to base labels (__fixups__) are resolved through the
-//     base's __symbols__, or through `baseSymbols` when given (e.g. from a
-//     separate `dtc -@` compile of a DTS base). Labelled base nodes that
-//     have no phandle yet get a new one;
+//     base's __symbols__, or else through `baseSymbols` (e.g. from
+//     baseSymbolsFor()). Labelled base nodes that have no phandle yet get
+//     a new one;
 //  3. each fragment's __overlay__ node is merged into its `target`
 //     (phandle) or `target-path`: properties are added or replaced, child
 //     nodes merged recursively;
-//  4. if the base has __symbols__, the overlay's symbols are added with
-//     their paths in the merged tree.
+//  4. the overlay's symbols are added, with their paths in the merged
+//     tree, to the base's __symbols__ (if it has one) and to `baseSymbols`
+//     (if given), so later overlays can refer to them.
 // On failure `base` is left unchanged and `error` (if given) says why.
 bool applyOverlay(DeviceTree& base, const DeviceTree& overlay, std::string* error = nullptr,
-                  const SymbolMap* baseSymbols = nullptr);
+                  SymbolMap* baseSymbols = nullptr);
+
+// Labels of a base tree loaded from `filename`: its own __symbols__ if it
+// has them, otherwise, for a DTS source, those of a separate `dtc -@`
+// compile of the same file (`options` gives include paths). Empty if
+// neither is available.
+SymbolMap baseSymbolsFor(const DeviceTree& base, const std::string& filename, const LoadOptions& options = {});
+
+// Loads an overlay (.dtbo, or .dtso compiled with `dtc -@`). Returns false
+// and sets `error` if it cannot be loaded or is not an overlay.
+bool loadOverlay(DeviceTree& overlay, const std::string& filename, const LoadOptions& options = {},
+                 std::string* error = nullptr);
 
 } // namespace DTE
 

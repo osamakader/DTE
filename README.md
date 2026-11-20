@@ -251,6 +251,23 @@ References are decoded from the properties that hold phandles
 table's "Refers to" column and the "Referenced by" list show the same
 information and let you jump between nodes.
 
+#### `overlay <base> <output> <overlay>...`
+Apply device tree overlays to a base tree, like `fdtoverlay`, and save the
+result as DTB or DTS (by extension). Overlays may be compiled `.dtbo` files or
+`.dtso` sources with `/plugin/;`; the base may be a DTB or a DTS file.
+
+Overlays refer to base labels (`&uart0`) through the base's `__symbols__`
+node, which `dtc` only emits with `-@`. For a DTS base the labels are taken
+from a separate `dtc -@` compile, so the base does not need to be rebuilt, and
+labelled nodes that have no phandle yet get one. Labels defined by one overlay
+can be used by the next.
+
+```bash
+./bin/dte-cli overlay board.dtb merged.dtb uart.dtbo sensor.dtbo
+./bin/dte-cli overlay board.dts merged.dts uart.dtso
+./bin/dte-cli diff board.dts merged.dts   # what the overlays changed
+```
+
 ## Examples
 
 ### Basic Device Tree Analysis

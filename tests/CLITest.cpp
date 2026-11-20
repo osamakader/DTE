@@ -220,3 +220,31 @@ TEST_F(CLITest, RefsCommand) {
 
     EXPECT_EQ(cli({"refs", file, "/nope"}).exitCode, 1);
 }
+
+TEST_F(CLITest, OverlayCommand) {
+    const std::string dir = kData + "/overlay";
+    const std::string out = (tmp_.path() / "merged.dtb").string();
+    auto r = cli({"overlay", dir + "/base.dts", out, dir + "/overlay.dtso"});
+    ASSERT_EQ(r.exitCode, 0) << r.stderrData;
+    EXPECT_NE(r.stderrData.find("Applied 1 overlay(s)"), std::string::npos) << r.stderrData;
+    EXPECT_EQ(cli({"validate", out}).exitCode, 0);
+
+#ifdef FDTOVERLAY_PATH
+    // Same result as fdtoverlay on dtc -@ compiled inputs
+    const auto base = (tmp_.path() / "base.dtb").string();
+    const auto dtbo = (tmp_.path() / "overlay.dtbo").string();
+    const auto ref = (tmp_.path() / "ref.dtb").string();
+    ASSERT_TRUE(runProcess({DTC_PATH, "-q", "-@", "-O", "dtb", "-o", base, dir + "/base.dts"}).ok());
+    ASSERT_TRUE(runProcess({DTC_PATH, "-q", "-@", "-O", "dtb", "-o", dtbo, dir + "/overlay.dtso"}).ok());
+    ASSERT_TRUE(runProcess({FDTOVERLAY_PATH, "-i", base, "-o", ref, dtbo}).ok());
+    const auto ours = (tmp_.path() / "ours.dtb").string();
+    ASSERT_EQ(cli({"overlay", base, ours, dtbo}).exitCode, 0);
+    auto d = cli({"diff", ref, ours});
+    EXPECT_EQ(d.exitCode, 0) << d.stdoutData;
+#endif
+
+    auto bad = cli({"overlay", dir + "/base.dts", out, dir + "/base.dts"});
+    EXPECT_EQ(bad.exitCode, 1);
+    EXPECT_NE(bad.stderrData.find("is not an overlay"), std::string::npos);
+    EXPECT_EQ(cli({"overlay", dir + "/base.dts", "out.json", dir + "/overlay.dtso"}).exitCode, 1);
+}

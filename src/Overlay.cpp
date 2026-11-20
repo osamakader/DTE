@@ -1,4 +1,5 @@
 #include "Overlay.h"
+#include "DeviceTreeParser.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -193,10 +194,10 @@ std::shared_ptr<DeviceTreeNode> fragmentTarget(const std::shared_ptr<DeviceTreeN
 // Step 4: overlay symbols point into fragments
 // ("/fragment@0/__overlay__/dev"); rewrite them to the merged location.
 void mergeSymbols(const std::shared_ptr<DeviceTreeNode>& overlayRoot, const std::shared_ptr<DeviceTreeNode>& baseRoot,
-                  const std::map<std::string, std::string>& fragmentTargets) {
+                  const std::map<std::string, std::string>& fragmentTargets, SymbolMap* extra) {
     auto overlaySymbols = overlayRoot->findChild("__symbols__");
     auto baseSymbols = baseRoot->findChild("__symbols__");
-    if (!overlaySymbols || !baseSymbols) return;
+    if (!overlaySymbols || (!baseSymbols && !extra)) return;
 
     for (const auto& prop : overlaySymbols->getProperties()) {
         if (!prop.isString()) continue;
@@ -208,7 +209,8 @@ void mergeSymbols(const std::shared_ptr<DeviceTreeNode>& overlayRoot, const std:
         const std::string rest = path.substr(marker + std::string("/__overlay__").size());
         std::string merged = target->second == "/" ? rest : target->second + rest;
         if (merged.empty()) merged = "/";
-        baseSymbols->addProperty(DeviceTreeProperty(prop.getName(), merged));
+        if (baseSymbols) baseSymbols->addProperty(DeviceTreeProperty(prop.getName(), merged));
+        if (extra) (*extra)[prop.getName()] = merged;
     }
 }
 
@@ -234,7 +236,7 @@ bool isOverlay(const DeviceTree& tree) {
     return false;
 }
 
-bool applyOverlay(DeviceTree& base, const DeviceTree& overlay, std::string* error, const SymbolMap* baseSymbols) {
+bool applyOverlay(DeviceTree& base, const DeviceTree& overlay, std::string* error, SymbolMap* baseSymbols) {
     try {
         if (!base.getRoot()) fail("the base tree is empty");
         if (!overlay.getRoot() || !isOverlay(overlay)) {
@@ -264,13 +266,39 @@ bool applyOverlay(DeviceTree& base, const DeviceTree& overlay, std::string* erro
             merge(content, target);
         }
 
-        mergeSymbols(ov, work, fragmentTargets);
+        mergeSymbols(ov, work, fragmentTargets, baseSymbols);
         base.setRoot(work);
         return true;
     } catch (const std::exception& e) {
         if (error) *error = e.what();
         return false;
     }
+}
+
+SymbolMap baseSymbolsFor(const DeviceTree& base, const std::string& filename, const LoadOptions& options) {
+    if (base.findNodeByPath("/__symbols__")) return symbolsOf(base);
+    if (filename.empty() || !DTSParser().canParse(filename)) return {};
+    DeviceTree withSymbols;
+    LoadOptions o = options;
+    o.symbols = true;
+    if (!withSymbols.loadFromFile(filename, o)) return {};
+    return symbolsOf(withSymbols);
+}
+
+bool loadOverlay(DeviceTree& overlay, const std::string& filename, const LoadOptions& options, std::string* error) {
+    LoadOptions o = options;
+    o.symbols = true; // so labels defined by the overlay can be exported
+    DeviceTree loaded;
+    if (!loaded.loadFromFile(filename, o)) {
+        if (error) *error = loaded.getLoadError();
+        return false;
+    }
+    if (!isOverlay(loaded)) {
+        if (error) *error = filename + " is not an overlay (compile overlay sources with /plugin/;)";
+        return false;
+    }
+    overlay = loaded;
+    return true;
 }
 
 } // namespace DTE

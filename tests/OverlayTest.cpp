@@ -164,7 +164,7 @@ TEST_F(OverlayWithDtc, AppliesToDtsBaseWithoutSymbols) {
     LoadOptions symbols;
     symbols.symbols = true;
     ASSERT_TRUE(withSymbols.loadFromFile(kOverlayDir + "/base.dts", symbols));
-    const SymbolMap labels = symbolsOf(withSymbols);
+    SymbolMap labels = symbolsOf(withSymbols);
     ASSERT_EQ(labels.at("uart0"), "/soc/serial@3000");
 
     // uart0 and clk have no phandle yet (nothing in the base refers to them)
@@ -222,5 +222,32 @@ TEST_F(OverlayWithDtc, BaseWithoutSymbolsAndNoMapFails) {
     EXPECT_FALSE(applyOverlay(base, overlay_, &error));
     EXPECT_NE(error.find("dtc -@"), std::string::npos) << error;
     EXPECT_EQ(base.getRoot(), before);
+}
+#endif
+
+#ifdef DTC_PATH
+TEST_F(OverlayWithDtc, LoadHelpersAndChainedOverlays) {
+    DeviceTree base;
+    ASSERT_TRUE(base.loadFromFile(kOverlayDir + "/base.dts"));
+    SymbolMap labels = baseSymbolsFor(base, kOverlayDir + "/base.dts");
+    EXPECT_EQ(labels.at("clk"), "/soc/clock-controller@2000");
+
+    DeviceTree overlay;
+    std::string error;
+    ASSERT_TRUE(loadOverlay(overlay, kOverlayDir + "/overlay.dtso", {}, &error)) << error;
+    ASSERT_TRUE(applyOverlay(base, overlay, &error, &labels)) << error;
+    // Labels added by the first overlay are available to the next one
+    EXPECT_EQ(labels.at("sensor"), "/soc/sensor@4000");
+
+    const auto second = tmp_.write("second.dtso", "/dts-v1/;\n/plugin/;\n&sensor { status = \"disabled\"; };\n");
+    DeviceTree overlay2;
+    ASSERT_TRUE(loadOverlay(overlay2, second, {}, &error)) << error;
+    ASSERT_TRUE(applyOverlay(base, overlay2, &error, &labels)) << error;
+    EXPECT_EQ(std::get<std::string>(findProp(base, "/soc/sensor@4000", "status")->getValue()), "disabled");
+
+    // A plain tree is rejected by loadOverlay
+    DeviceTree notOverlay;
+    EXPECT_FALSE(loadOverlay(notOverlay, kOverlayDir + "/base.dts", {}, &error));
+    EXPECT_NE(error.find("is not an overlay"), std::string::npos) << error;
 }
 #endif

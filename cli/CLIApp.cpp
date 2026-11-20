@@ -1,4 +1,5 @@
 #include "CLIApp.h"
+#include "Overlay.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -210,6 +211,13 @@ void CLIApp::setupCommands() {
     refsCmd.usage = "refs <filename> [path]";
     refsCmd.handler = [this](const std::vector<std::string>& args) { return handleRefs(args); };
     commands_["refs"] = refsCmd;
+
+    CLICommand overlayCmd;
+    overlayCmd.name = "overlay";
+    overlayCmd.description = "Apply overlays (.dtbo/.dtso) to a base tree and save the result";
+    overlayCmd.usage = "overlay <base> <output> <overlay>...";
+    overlayCmd.handler = [this](const std::vector<std::string>& args) { return handleOverlay(args); };
+    commands_["overlay"] = overlayCmd;
     
     CLICommand helpCmd;
     helpCmd.name = "help";
@@ -290,6 +298,14 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " refs board.dtb\n";
         std::cout << "  " << programName_ << " refs board.dtb /soc/interrupt-controller@1000\n";
+    } else if (command == "overlay") {
+        std::cout << "\nOverlays are applied in order, like fdtoverlay. The output format follows its\n";
+        std::cout << "extension (.dtb/.dtbo or .dts). The base may be DTS: labels used by the\n";
+        std::cout << "overlays are then taken from a `dtc -@` compile of it. Overlay sources\n";
+        std::cout << "(.dtso) need /plugin/;.\n";
+        std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
+        std::cout << "  " << programName_ << " overlay board.dtb merged.dtb uart.dtbo sensor.dtbo\n";
+        std::cout << "  " << programName_ << " overlay board.dts merged.dts uart.dtso\n";
     } else if (command == "convert") {
         std::cout << "\nThe input format is detected from the file contents; the output\n";
         std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
@@ -785,6 +801,58 @@ int CLIApp::handleRefs(const std::vector<std::string>& args) {
     for (const auto& r : to) {
         std::cout << "  " << r.source->getFullPath() << ":" << r.property << "\n";
     }
+    return EXIT_SUCCESS;
+}
+
+} // namespace DTE
+
+namespace DTE {
+
+int CLIApp::handleOverlay(const std::vector<std::string>& args) {
+    if (args.size() < 3) {
+        printError("Usage: " + commands_["overlay"].usage);
+        return EXIT_FAILURE;
+    }
+    const std::string& baseFile = args[0];
+    const std::string& outputFile = args[1];
+    const std::string ext = getFileExtension(outputFile);
+    if (ext != "dtb" && ext != "dtbo" && ext != "dts") {
+        printError("Output must end in .dtb, .dtbo or .dts: " + outputFile);
+        return EXIT_FAILURE;
+    }
+
+    printInfo("Loading base device tree: " + baseFile);
+    if (!loadDeviceTree(baseFile)) {
+        return EXIT_FAILURE;
+    }
+    const auto before = std::make_shared<DeviceTree>(*deviceTree_);
+    before->setRoot(deviceTree_->getRoot()->clone());
+    SymbolMap labels = baseSymbolsFor(*deviceTree_, baseFile, loadOptions());
+
+    for (size_t i = 2; i < args.size(); ++i) {
+        printInfo("Applying overlay: " + args[i]);
+        DeviceTree overlay;
+        std::string error;
+        if (!loadOverlay(overlay, args[i], loadOptions(), &error)) {
+            printError("Failed to load overlay " + args[i] + "\n" + error);
+            return EXIT_FAILURE;
+        }
+        if (!applyOverlay(*deviceTree_, overlay, &error, &labels)) {
+            printError("Failed to apply overlay " + args[i] + "\n" + error);
+            return EXIT_FAILURE;
+        }
+    }
+
+    std::string error;
+    if (!deviceTree_->saveToFile(outputFile, ext == "dts", &error)) {
+        printError(error);
+        return EXIT_FAILURE;
+    }
+
+    DeviceTreeDiff diff(before, deviceTree_);
+    printSuccess("Applied " + std::to_string(args.size() - 2) + " overlay(s): " +
+                 std::to_string(diff.getAddedCount()) + " added, " + std::to_string(diff.getModifiedCount()) +
+                 " modified, " + std::to_string(diff.getRemovedCount()) + " removed -> " + outputFile);
     return EXIT_SUCCESS;
 }
 
