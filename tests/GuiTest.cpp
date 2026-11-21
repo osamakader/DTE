@@ -12,6 +12,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QStandardPaths>
+#include <QDir>
+#include "DeviceTreeParser.h"
 #include <QStatusBar>
 #include <QListWidget>
 #include <QUndoStack>
@@ -659,6 +661,27 @@ TEST_F(GuiTest, ApplyOverlayErrorsLeaveTreeUnchanged) {
     EXPECT_NE(window_->applyOverlayFile(kBoard).indexOf("is not an overlay"), -1);
     EXPECT_EQ(window_->deviceTree()->getRoot(), root);
     EXPECT_EQ(window_->undoStack()->count(), 0);
+}
+
+TEST_F(GuiTest, OpenSystemDeviceTreeAction) {
+    auto* action = actionNamed(window_.get(), "Open S&ystem Device Tree");
+    ASSERT_TRUE(action);
+    EXPECT_EQ(action->isEnabled(), !DTE::systemDeviceTreePath().empty());
+}
+
+TEST_F(GuiTest, LoadsDeviceTreeDirectory) {
+    QTemporaryDir dir;
+    const QString dt = dir.filePath("device-tree");
+    QDir().mkpath(dt + "/soc");
+    QFile model(dt + "/model");
+    ASSERT_TRUE(model.open(QIODevice::WriteOnly));
+    model.write(QByteArray("Live board\0", 11));
+    model.close();
+
+    window_->loadDeviceTree(dt);
+    ASSERT_TRUE(window_->deviceTree());
+    EXPECT_EQ(tree_->topLevelItem(0)->childCount(), 1);
+    EXPECT_EQ(props_->item(0, 2)->text(), "\"Live board\"");
 }
 
 TEST_F(GuiTest, Screenshot) {

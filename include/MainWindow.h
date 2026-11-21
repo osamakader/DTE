@@ -161,6 +161,7 @@ private slots:
     void onProblemDoubleClicked(int row, int column);
     void onReferencedByActivated(QListWidgetItem* item);
     void applyOverlay();
+    void openSystemDeviceTree();
     void showHelp();
     
 private:
@@ -206,6 +207,7 @@ private:
     QAction* diffAction_;
     QAction* validateAction_;
     QAction* applyOverlayAction_ = nullptr;
+    QAction* openSystemAction_ = nullptr;
     
     QAction* aboutAction_;
     QAction* aboutQtAction_;

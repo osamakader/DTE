@@ -4,6 +4,15 @@ A modern C++ and Qt application for visualizing and editing Device Tree (DTB/DTS
 
 ## Features
 
+### Inputs
+- DTB / DTBO blobs (detected by content), DTS / DTSI / DTSO sources (compiled
+  with dtc, with C preprocessing when needed)
+- The live device tree of a running Linux system: `/proc/device-tree`
+  (`/sys/firmware/devicetree/base`), or `/sys/firmware/fdt` as root. In the
+  GUI: File > Open System Device Tree. Property values are typed as for DTBs;
+  directory order is not the original order, so nodes and properties are
+  sorted by name.
+
 ### Core Functionality
 - **Visualize and edit Device Tree files** - Load and display DTB/DTS files in a user-friendly tree structure
 - **Diff two DTBs/DTS** - Compare device trees to see changes (overlays vs base)
@@ -276,6 +285,11 @@ can be used by the next.
 ```bash
 # Get information about a device tree
 ./bin/dte-cli info device.dtb
+
+# Inspect the running system's device tree (Linux, e.g. on the board)
+./bin/dte-cli list /proc/device-tree
+./bin/dte-cli export /proc/device-tree dts live.dts
+./bin/dte-cli diff my-board.dts /proc/device-tree   # what the kernel actually got
 
 # Load a kernel-style DTS that includes dt-bindings headers
 ./bin/dte-cli -I linux/include list linux/arch/arm64/boot/dts/vendor/board.dts

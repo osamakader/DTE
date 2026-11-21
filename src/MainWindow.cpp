@@ -147,6 +147,16 @@ void MainWindow::createActions() {
     openAction_->setStatusTip("Open a device tree file");
     connect(openAction_, &QAction::triggered, this, static_cast<void (MainWindow::*)()>(&MainWindow::openFile));
     
+    openSystemAction_ = new QAction("Open S&ystem Device Tree", this);
+    const QString systemPath = QString::fromStdString(systemDeviceTreePath());
+    if (systemPath.isEmpty()) {
+        openSystemAction_->setEnabled(false);
+        openSystemAction_->setStatusTip("This system does not expose a device tree (/proc/device-tree)");
+    } else {
+        openSystemAction_->setStatusTip("Open the running system's device tree (" + systemPath + ")");
+    }
+    connect(openSystemAction_, &QAction::triggered, this, &MainWindow::openSystemDeviceTree);
+
     saveAction_ = new QAction(QIcon(":/icons/save.png"), "&Save", this);
     saveAction_->setShortcut(QKeySequence::Save);
     saveAction_->setStatusTip("Save the current device tree");
@@ -252,6 +262,7 @@ void MainWindow::createMenus() {
     // File menu
     QMenu* fileMenu = menuBar()->addMenu("&File");
     fileMenu->addAction(openAction_);
+    fileMenu->addAction(openSystemAction_);
     fileMenu->addAction(saveAction_);
     fileMenu->addAction(saveAsAction_);
     fileMenu->addSeparator();
@@ -437,7 +448,9 @@ void MainWindow::openFile() {
 }
 
 bool MainWindow::saveFile() {
-    if (currentFile_.isEmpty()) {
+    // A tree read from a directory (e.g. /proc/device-tree) cannot be
+    // written back there
+    if (currentFile_.isEmpty() || QFileInfo(currentFile_).isDir()) {
         saveFileAs();
         return !currentFile_.isEmpty() && !isModified_;
     }
@@ -1141,6 +1154,15 @@ void MainWindow::updatePropertyTable() {
     referencedByLabel_->setText(incoming == 0 ? QString("Referenced by: no other node")
                                               : QString("Referenced by %1:").arg(incoming));
     propertyTable_->setNode(node, std::move(from));
+}
+
+void MainWindow::openSystemDeviceTree() {
+    const QString path = QString::fromStdString(systemDeviceTreePath());
+    if (path.isEmpty()) {
+        showError("Open System Device Tree", "This system does not expose a device tree (/proc/device-tree).");
+        return;
+    }
+    loadDeviceTree(path);
 }
 
 void MainWindow::applyOverlay() {
