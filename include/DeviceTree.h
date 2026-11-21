@@ -59,6 +59,13 @@ private:
     PropertyValue value_;
 };
 
+// Raw DTB encoding of a value (strings NUL-terminated, cells big-endian;
+// an empty property is zero bytes), and the reverse: the most natural value
+// for raw bytes, inferred like dtc's decompiler (string, string list,
+// cells, or bytes).
+std::vector<uint8_t> propertyValueToBytes(const PropertyValue& value);
+PropertyValue propertyValueFromBytes(const uint8_t* data, size_t size);
+
 // Quotes and escapes a string for DTS output (\\, \", \n, \t, \xNN).
 std::string quoteDtsString(const std::string& s);
 

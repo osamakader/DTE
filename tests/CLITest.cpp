@@ -248,3 +248,21 @@ TEST_F(CLITest, OverlayCommand) {
     EXPECT_NE(bad.stderrData.find("is not an overlay"), std::string::npos);
     EXPECT_EQ(cli({"overlay", dir + "/base.dts", "out.json", dir + "/overlay.dtso"}).exitCode, 1);
 }
+
+TEST_F(CLITest, ReadsDeviceTreeDirectory) {
+    // A minimal /proc/device-tree style directory
+    const auto dir = tmp_.path() / "device-tree";
+    std::filesystem::create_directories(dir / "cpus");
+    std::ofstream(dir / "model", std::ios::binary) << "Live board" << '\0';
+    std::ofstream(dir / "name", std::ios::binary) << '\0';
+    std::ofstream(dir / "cpus" / "#size-cells", std::ios::binary).write("\0\0\0\0", 4);
+
+    auto r = cli({"list", dir.string()});
+    ASSERT_EQ(r.exitCode, 0) << r.stderrData;
+    EXPECT_NE(r.stdoutData.find("model = \"Live board\""), std::string::npos) << r.stdoutData;
+    EXPECT_NE(r.stdoutData.find("#size-cells = <0x0>"), std::string::npos);
+    EXPECT_EQ(r.stdoutData.find("name ="), std::string::npos);
+
+    const auto out = (tmp_.path() / "live.dts").string();
+    EXPECT_EQ(cli({"export", dir.string(), "dts", out}).exitCode, 0);
+}

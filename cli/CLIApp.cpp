@@ -9,6 +9,7 @@
 #include <cstring>
 #include <functional>
 #include <unistd.h>
+#include <filesystem>
 
 namespace DTE {
 
@@ -64,9 +65,11 @@ namespace {
         return "";
     }
     
+    // Exists (file or directory, e.g. /proc/device-tree); whether it can
+    // be read is reported when loading.
     bool fileExists(const std::string& filename) {
-        std::ifstream file(filename);
-        return file.good();
+        std::error_code ec;
+        return std::filesystem::exists(filename, ec);
     }
 }
 

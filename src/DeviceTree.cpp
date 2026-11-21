@@ -9,6 +9,8 @@
 #include <map>
 #include <cctype>
 #include <functional>
+#include <unistd.h>
+#include <filesystem>
 
 
 namespace DTE {
@@ -323,9 +325,16 @@ DeviceTree::DeviceTree()
 bool DeviceTree::loadFromFile(const std::string& filename, const LoadOptions& options) {
     auto parser = DeviceTreeParserFactory::createParser(filename);
     if (!parser) {
-        loadError_ = std::ifstream(filename)
-            ? "Unrecognized file format (expected a DTB or a .dts/.dtsi/.dtso file): " + filename
-            : "Cannot open file: " + filename;
+        std::error_code ec;
+        if (!std::filesystem::exists(filename, ec)) {
+            loadError_ = "Cannot open file: " + filename;
+        } else if (::access(filename.c_str(), R_OK) != 0) {
+            loadError_ = "Permission denied: " + filename +
+                         (filename == "/sys/firmware/fdt" ? " (needs root; /proc/device-tree is readable by all users)" : "");
+        } else {
+            loadError_ = "Unrecognized file format (expected a DTB, a .dts/.dtsi/.dtso file or a "
+                         "/proc/device-tree style directory): " + filename;
+        }
         return false;
     }
     
@@ -537,6 +546,10 @@ void writeFdtNode(FdtWriter& w, const DeviceTreeNode& node, bool isRoot) {
 }
 
 } // namespace
+
+std::vector<uint8_t> propertyValueToBytes(const PropertyValue& value) {
+    return encodeValue(value);
+}
 
 std::vector<uint8_t> DeviceTree::exportAsDTB() const {
     FdtWriter w;

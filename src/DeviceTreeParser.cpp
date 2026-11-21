@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <iterator>
 #include <regex>
+#include <cerrno>
+#include <filesystem>
 #include <cstdlib>
 #include <unistd.h>
 
@@ -309,6 +311,10 @@ bool hasSuffix(const std::string& s, const std::string& suffix) {
 
 } // namespace
 
+PropertyValue propertyValueFromBytes(const uint8_t* data, size_t size) {
+    return inferPropertyValue(data, size);
+}
+
 std::shared_ptr<DeviceTree> DTBParser::parseBuffer(const uint8_t* data, size_t size) {
     lastError_.clear();
     try {
@@ -495,6 +501,77 @@ bool DTSParser::canParse(const std::string& filename) const {
            hasSuffix(filename, ".dtso");
 }
 
+// DirectoryParser implementation
+namespace {
+
+void readDirectoryNode(const std::filesystem::path& dir, const std::shared_ptr<DeviceTreeNode>& node) {
+    std::vector<std::filesystem::directory_entry> entries;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        entries.push_back(*it);
+    }
+    if (ec) {
+        throw std::runtime_error("Cannot read directory " + dir.string() + ": " + ec.message());
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) { return a.path().filename() < b.path().filename(); });
+
+    for (const auto& entry : entries) {
+        const std::string name = entry.path().filename().string();
+        const auto status = entry.symlink_status(ec);
+        if (ec || std::filesystem::is_symlink(status)) continue;
+
+        if (std::filesystem::is_directory(status)) {
+            auto child = std::make_shared<DeviceTreeNode>(name);
+            node->addChild(child);
+            readDirectoryNode(entry.path(), child);
+        } else if (std::filesystem::is_regular_file(status)) {
+            if (name == "name") continue; // synthesized by the kernel, skipped like dtc -I fs
+            std::ifstream file(entry.path(), std::ios::binary);
+            if (!file) {
+                throw std::runtime_error("Cannot read " + entry.path().string() + ": " + std::strerror(errno));
+            }
+            std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            node->addProperty(DeviceTreeProperty(name, propertyValueFromBytes(bytes.data(), bytes.size())));
+        }
+    }
+}
+
+} // namespace
+
+bool DirectoryParser::canParse(const std::string& path) const {
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec);
+}
+
+std::shared_ptr<DeviceTree> DirectoryParser::parse(const std::string& path) {
+    lastError_.clear();
+    try {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(path, ec)) {
+            lastError_ = "Not a directory: " + path;
+            return nullptr;
+        }
+        auto tree = std::make_shared<DeviceTree>();
+        auto root = std::make_shared<DeviceTreeNode>("/");
+        readDirectoryNode(path, root);
+        tree->setRoot(root);
+        tree->setSourceFile(path);
+        return tree;
+    } catch (const std::exception& e) {
+        lastError_ = e.what();
+    }
+    return nullptr;
+}
+
+std::string systemDeviceTreePath() {
+    std::error_code ec;
+    for (const char* candidate : {"/proc/device-tree", "/sys/firmware/devicetree/base"}) {
+        if (std::filesystem::is_directory(candidate, ec)) return candidate;
+    }
+    return {};
+}
+
 // DeviceTreeParserFactory implementation
 std::unique_ptr<DeviceTreeParser> DeviceTreeParserFactory::createParser(const std::string& filename) {
     auto parsers = getAllParsers();
@@ -510,6 +587,7 @@ std::unique_ptr<DeviceTreeParser> DeviceTreeParserFactory::createParser(const st
 
 std::vector<std::unique_ptr<DeviceTreeParser>> DeviceTreeParserFactory::getAllParsers() {
     std::vector<std::unique_ptr<DeviceTreeParser>> parsers;
+    parsers.push_back(std::make_unique<DirectoryParser>());
     parsers.push_back(std::make_unique<DTBParser>());
     parsers.push_back(std::make_unique<DTSParser>());
     return parsers;

@@ -18,6 +18,7 @@ add_executable(dte-tests
     ValidationTest.cpp
     ReferencesTest.cpp
     OverlayTest.cpp
+    SystemTreeTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )

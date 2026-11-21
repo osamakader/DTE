@@ -77,6 +77,23 @@ private:
     bool symbols_ = false;
 };
 
+// Device tree exposed as a directory hierarchy, like the kernel's
+// /proc/device-tree (= /sys/firmware/devicetree/base): one directory per
+// node and one file per property holding its raw bytes. Values are typed
+// like DTB values. As with `dtc -I fs`, `name` files (synthesized by the
+// kernel for every node) are skipped; entries are sorted by name because
+// directories do not keep the original order; symlinks are not followed.
+class DirectoryParser : public DeviceTreeParser {
+public:
+    std::shared_ptr<DeviceTree> parse(const std::string& path) override;
+    bool canParse(const std::string& path) const override;
+};
+
+// Where a running Linux system exposes its device tree, or empty if none
+// of the usual locations exists (/proc/device-tree, then
+// /sys/firmware/devicetree/base).
+std::string systemDeviceTreePath();
+
 // Parser factory
 class DeviceTreeParserFactory {
 public:
