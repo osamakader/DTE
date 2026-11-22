@@ -6,6 +6,7 @@ add_library(dte-core STATIC
     DtsValue.cpp
     Validation.cpp
     References.cpp
+    Addresses.cpp
     Overlay.cpp
     DeviceTreeDiff.cpp
 )

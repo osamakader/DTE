@@ -1,0 +1,66 @@
+/dts-v1/;
+
+/ {
+	compatible = "acme,addresses";
+	model = "Address translation test board";
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x40000000>,
+		      <0x8 0x80000000 0x0 0x80000000>;
+	};
+
+	/* child 0x0.. maps to CPU 0x1_0000_0000.. */
+	soc@100000000 {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x1 0x0 0x40000000>;
+
+		serial@1000 {
+			reg = <0x1000 0x100>;
+		};
+
+		/* nested bus: child 0x0.. maps to soc 0x20000000.. */
+		bridge@20000000 {
+			compatible = "simple-bus";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x0 0x20000000 0x100000>;
+
+			timer@100 {
+				reg = <0x100 0x20>, <0x200 0x20>;
+			};
+
+			/* outside the bridge's window */
+			stray@200000 {
+				reg = <0x200000 0x10>;
+			};
+		};
+
+		/* identity mapping */
+		bus {
+			compatible = "simple-bus";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges;
+
+			gpio@4000 {
+				reg = <0x4000 0x40>;
+			};
+		};
+
+		/* not memory-mapped */
+		i2c@3000 {
+			reg = <0x3000 0x100>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			eeprom@50 {
+				reg = <0x50>;
+			};
+		};
+	};
+};
