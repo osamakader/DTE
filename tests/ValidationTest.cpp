@@ -179,6 +179,20 @@ TEST(Validation, BrokenReferencesInAnyKnownProperty) {
     EXPECT_EQ(f.issues(), std::vector<std::string>{});
 }
 
+TEST(Validation, RangesAndTranslation) {
+    Fixture f;
+    // soc maps child 0x10000000.. (0x1000 long) only
+    set(f.soc, "ranges", Cells{0x10000000, 0x10000000, 0x1000});
+    EXPECT_EQ(f.issues(), (std::vector<std::string>{
+                              "warning: /soc/interrupt-controller@1000:reg: address 0x1000 is outside the 'ranges' "
+                              "of /soc",
+                          }));
+    set(f.soc, "ranges", Cells{0, 0});
+    EXPECT_EQ(f.issues().front(),
+              "error: /soc:ranges: 'ranges' has 2 cells, which is not a multiple of child #address-cells + parent "
+              "#address-cells + child #size-cells (1 + 1 + 1)");
+}
+
 TEST(Validation, CompatibleAndStatusValues) {
     Fixture f;
     set(f.uart, "compatible", Cells{1});

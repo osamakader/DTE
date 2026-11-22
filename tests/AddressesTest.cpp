@@ -150,3 +150,14 @@ TEST(Addresses, MissingReg) {
     root->addChild(dev);
     EXPECT_EQ(regOf(dev), (std::vector<std::string>{"error: no 'reg' property"}));
 }
+
+#ifdef DTC_PATH
+TEST_F(AddressesFromDts, ValidationFlagsOnlyTheStrayNode) {
+    std::vector<std::string> issues;
+    for (const auto& i : tree_.check()) issues.push_back(i.toString());
+    EXPECT_EQ(issues, (std::vector<std::string>{
+                          "warning: /soc@100000000/bridge@20000000/stray@200000:reg: address 0x200000 is outside the "
+                          "'ranges' of /soc@100000000/bridge@20000000",
+                      }));
+}
+#endif

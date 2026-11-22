@@ -2,6 +2,7 @@
 
 #include "DeviceTree.h"
 #include "DtsValue.h"
+#include "Addresses.h"
 
 #include <algorithm>
 #include <cctype>
@@ -136,6 +137,7 @@ private:
 
         checkCellCounts(path, n);
         if (parent) checkReg(path, n, *parent);
+        checkAddressing(path, node);
         checkCompatible(path, n);
         checkStatus(path, n);
         checkReferences(path, n);
@@ -213,6 +215,28 @@ private:
         uint64_t addr = 0;
         for (uint32_t i = 0; i < ac && i < 2 && i < cells.size(); ++i) addr = (addr << 32) | cells[i];
         return hex(addr);
+    }
+
+    // ranges must decode; reg must fall inside the parent buses' windows
+    void checkAddressing(const std::string& path, const std::shared_ptr<DeviceTreeNode>& node) {
+        const auto& n = static_cast<const DeviceTreeNode&>(*node);
+        std::string error;
+        if (const auto* ranges = n.findProperty("ranges"); ranges && node->getParent()) {
+            std::vector<RangeEntry> entries;
+            bool identity = false;
+            if (!decodeRanges(node, entries, identity, &error) && error.find("not supported") == std::string::npos) {
+                this->error(path, "ranges", error);
+            }
+        }
+        std::vector<RegEntry> regs;
+        if (node->getParent() && n.findProperty("reg") && decodeReg(node, regs, &error)) {
+            for (const auto& r : regs) {
+                if (!r.translated && r.note.find("outside the 'ranges'") != std::string::npos) {
+                    warning(path, "reg", "address " + r.note);
+                    break;
+                }
+            }
+        }
     }
 
     void checkCompatible(const std::string& path, const DeviceTreeNode& n) {
