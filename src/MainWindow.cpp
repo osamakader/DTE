@@ -837,7 +837,7 @@ void MainWindow::onPropertyChanged(const QString& propertyName, const QString& n
 
 void MainWindow::onPropertyCellDoubleClicked(int row, int column) {
     if (row < 0) return;
-    if (column == PropertyTableWidget::ReferencesColumn) {
+    if (column == PropertyTableWidget::DetailsColumn) {
         // Follow the reference
         const QString target = propertyTable_->referenceTarget(row);
         if (!target.isEmpty() && deviceTree_) {

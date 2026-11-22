@@ -1,4 +1,5 @@
 #include "PropertyTableWidget.h"
+#include "Addresses.h"
 #include <QHeaderView>
 #include <QTableWidgetItem>
 #include <QMessageBox>
@@ -12,7 +13,8 @@ PropertyTableWidget::PropertyTableWidget(QWidget* parent)
     
     // Set up table
     setColumnCount(4);
-    setHorizontalHeaderLabels({"Property", "Type", "Value", "Refers to"});
+    // Details: phandle targets of reference properties, decoded reg/ranges
+    setHorizontalHeaderLabels({"Property", "Type", "Value", "Details"});
     
     // Set table properties
     setAlternatingRowColors(true);
@@ -26,7 +28,7 @@ PropertyTableWidget::PropertyTableWidget(QWidget* parent)
     horizontalHeader()->setSectionResizeMode(NameColumn, QHeaderView::ResizeToContents);
     horizontalHeader()->setSectionResizeMode(TypeColumn, QHeaderView::ResizeToContents);
     horizontalHeader()->setSectionResizeMode(ValueColumn, QHeaderView::Stretch);
-    horizontalHeader()->setSectionResizeMode(ReferencesColumn, QHeaderView::ResizeToContents);
+    horizontalHeader()->setSectionResizeMode(DetailsColumn, QHeaderView::Stretch);
     
     // Connect signals
     connect(this, &QTableWidget::itemChanged, this, &PropertyTableWidget::onItemChanged);
@@ -39,7 +41,7 @@ void PropertyTableWidget::setNode(std::shared_ptr<DeviceTreeNode> node, std::vec
 }
 
 QString PropertyTableWidget::referenceTarget(int row) const {
-    auto* it = item(row, ReferencesColumn);
+    auto* it = item(row, DetailsColumn);
     return it ? it->data(Qt::UserRole).toString() : QString();
 }
 
@@ -115,10 +117,35 @@ void PropertyTableWidget::populateTable() {
         valueItem->setToolTip("Double-click to edit (DTS syntax)");
         setItem(i, ValueColumn, valueItem);
 
-        // Phandle references held by this property
+        // Phandle references held by this property, or decoded addresses
         QStringList targets;
         QString firstTarget;
         bool broken = false;
+        if (prop.getName() == "reg" && currentNode_->getParent()) {
+            std::vector<RegEntry> regs;
+            std::string error;
+            if (decodeReg(currentNode_, regs, &error)) {
+                for (const auto& r : regs) {
+                    targets << QString::fromStdString(describeReg(r));
+                    if (!r.translated && r.note.find("outside") != std::string::npos) broken = true;
+                }
+            } else {
+                targets << QString("⚠ %1").arg(QString::fromStdString(error));
+                broken = true;
+            }
+        } else if (prop.getName() == "ranges" && currentNode_->getParent()) {
+            std::vector<RangeEntry> ranges;
+            bool identity = false;
+            std::string error;
+            if (!decodeRanges(currentNode_, ranges, identity, &error)) {
+                targets << QString("⚠ %1").arg(QString::fromStdString(error));
+                broken = true;
+            } else if (identity) {
+                targets << "1:1 (child addresses = parent addresses)";
+            } else {
+                for (const auto& r : ranges) targets << QString::fromStdString(describeRange(r));
+            }
+        }
         for (const auto& ref : references_) {
             if (ref.property != prop.getName()) continue;
             if (!ref.problem.empty()) {
@@ -142,7 +169,7 @@ void PropertyTableWidget::populateTable() {
             refItem->setToolTip(targets.join("\n") + (firstTarget.isEmpty() ? "" : "\n\nDouble-click to go to the target"));
         }
         if (broken) refItem->setForeground(QColor(0xd3, 0x2f, 0x2f));
-        setItem(i, ReferencesColumn, refItem);
+        setItem(i, DetailsColumn, refItem);
     }
 }
 

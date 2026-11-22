@@ -13,10 +13,10 @@ class PropertyTableWidget : public QTableWidget {
 public:
     PropertyTableWidget(QWidget* parent = nullptr);
     // `references` are the decoded phandle references held by the node's
-    // properties; they fill the "Refers to" column.
+    // properties; with decoded reg/ranges they fill the "Details" column.
     void setNode(std::shared_ptr<DeviceTreeNode> node, std::vector<PhandleReference> references = {});
 
-    enum Column { NameColumn, TypeColumn, ValueColumn, ReferencesColumn };
+    enum Column { NameColumn, TypeColumn, ValueColumn, DetailsColumn };
     // Path of the first resolved target of the property in `row`, or empty.
     QString referenceTarget(int row) const;
     void clearNode();

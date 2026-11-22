@@ -580,11 +580,12 @@ TEST_F(GuiTest, PropertyTableShowsAndFollowsReferences) {
     tree_->setCurrentItem(findChildItem(tree_->topLevelItem(0), "serial@4000"));
 
     const int clocksRow = serial->propertyIndex("clocks");
-    const int col = PropertyTableWidget::ReferencesColumn;
+    const int col = PropertyTableWidget::DetailsColumn;
     EXPECT_EQ(props_->item(clocksRow, col)->text().toStdString(), "/clock-controller@2000 <0x3>; /oscillator");
     EXPECT_EQ(props_->item(serial->propertyIndex("reset-gpios"), col)->text().toStdString(),
               "/gpio@3000 <0x5 0x1>; /gpio@3000 <0x7 0x0>");
-    EXPECT_TRUE(props_->item(serial->propertyIndex("reg"), col)->text().isEmpty());
+    EXPECT_EQ(props_->item(serial->propertyIndex("reg"), col)->text().toStdString(), "0x4000 size 0x100");
+    EXPECT_TRUE(props_->item(serial->propertyIndex("clock-names"), col)->text().isEmpty());
 
     // Double-clicking the reference goes to its (first) target
     emit props_->cellDoubleClicked(clocksRow, col);
@@ -611,7 +612,7 @@ TEST_F(GuiTest, BrokenReferenceIsFlaggedAfterEdit) {
     window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/refs.dts");
     auto serial = nodeAt(*window_, "/serial@4000");
     ASSERT_TRUE(window_->applySetProperty(serial, "clocks", "clocks", "<0x99>").isEmpty());
-    const QString text = props_->item(serial->propertyIndex("clocks"), PropertyTableWidget::ReferencesColumn)->text();
+    const QString text = props_->item(serial->propertyIndex("clocks"), PropertyTableWidget::DetailsColumn)->text();
     EXPECT_TRUE(text.startsWith("⚠ refers to phandle 0x99")) << text.toStdString();
 }
 
@@ -682,6 +683,26 @@ TEST_F(GuiTest, LoadsDeviceTreeDirectory) {
     ASSERT_TRUE(window_->deviceTree());
     EXPECT_EQ(tree_->topLevelItem(0)->childCount(), 1);
     EXPECT_EQ(props_->item(0, 2)->text(), "\"Live board\"");
+}
+
+TEST_F(GuiTest, DetailsColumnDecodesRegAndRanges) {
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/addresses.dts");
+    auto* edit = window_->findChild<QLineEdit*>("findEdit");
+    const int col = PropertyTableWidget::DetailsColumn;
+
+    edit->setText("timer@100");
+    auto timer = nodeAt(*window_, "/soc@100000000/bridge@20000000/timer@100");
+    EXPECT_EQ(props_->item(timer->propertyIndex("reg"), col)->text().toStdString(),
+              "0x100 size 0x20 -> CPU 0x120000100; 0x200 size 0x20 -> CPU 0x120000200");
+
+    edit->setText("soc@");
+    auto soc = nodeAt(*window_, "/soc@100000000");
+    EXPECT_EQ(props_->item(soc->propertyIndex("ranges"), col)->text().toStdString(), "0x0..0x3fffffff -> 0x100000000");
+
+    edit->setText("eeprom");
+    auto eeprom = nodeAt(*window_, "/soc@100000000/i2c@3000/eeprom@50");
+    EXPECT_EQ(props_->item(eeprom->propertyIndex("reg"), col)->text().toStdString(),
+              "0x50 (not memory-mapped: /soc@100000000/i2c@3000 has no 'ranges')");
 }
 
 TEST_F(GuiTest, Screenshot) {
