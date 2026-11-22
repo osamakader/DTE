@@ -266,3 +266,17 @@ TEST_F(CLITest, ReadsDeviceTreeDirectory) {
     const auto out = (tmp_.path() / "live.dts").string();
     EXPECT_EQ(cli({"export", dir.string(), "dts", out}).exitCode, 0);
 }
+
+TEST_F(CLITest, MemmapCommand) {
+    auto r = cli({"memmap", kData + "/addresses.dts"});
+    ASSERT_EQ(r.exitCode, 0) << r.stderrData;
+    EXPECT_NE(r.stdoutData.find("Memory map (7 regions):"), std::string::npos) << r.stdoutData;
+    EXPECT_NE(r.stdoutData.find("0x0000000120000100-0x000000012000011f  0x20"), std::string::npos) << r.stdoutData;
+    EXPECT_NE(r.stdoutData.find("Not translated (2):"), std::string::npos);
+    EXPECT_LT(r.stdoutData.find("/memory@80000000"), r.stdoutData.find("serial@1000")); // sorted by address
+
+    auto o = cli({"memmap", tmp_.write("o.dts", "/dts-v1/;\n/ { #address-cells = <1>; #size-cells = <1>; "
+                                                "a@1000 { reg = <0x1000 0x100>; }; b@1080 { reg = <0x1080 0x10>; }; };\n")});
+    EXPECT_NE(o.stdoutData.find("/b@1080  overlaps /a@1000"), std::string::npos) << o.stdoutData;
+    EXPECT_NE(o.stderrData.find("1 overlapping region(s)"), std::string::npos);
+}

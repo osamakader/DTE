@@ -278,6 +278,15 @@ can be used by the next.
 ./bin/dte-cli diff board.dts merged.dts   # what the overlays changed
 ```
 
+#### `memmap <filename>`
+Show the CPU memory map: every `reg` entry translated through the parent
+buses' `ranges` (like the kernel's `of_translate_address`), sorted by
+address, with overlapping regions flagged. Entries that cannot be translated,
+such as devices on I2C/SPI buses or addresses outside a bus's `ranges`, are
+listed separately with the reason. The GUI shows the same decoding in the
+property table's Details column, and `validate` warns about addresses outside
+`ranges`. Addresses up to 64 bits are supported (not 3-cell PCI addresses).
+
 ## Examples
 
 ### Basic Device Tree Analysis

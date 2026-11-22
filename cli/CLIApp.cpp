@@ -1,5 +1,6 @@
 #include "CLIApp.h"
 #include "Overlay.h"
+#include "Addresses.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -221,6 +222,13 @@ void CLIApp::setupCommands() {
     overlayCmd.usage = "overlay <base> <output> <overlay>...";
     overlayCmd.handler = [this](const std::vector<std::string>& args) { return handleOverlay(args); };
     commands_["overlay"] = overlayCmd;
+
+    CLICommand memmapCmd;
+    memmapCmd.name = "memmap";
+    memmapCmd.description = "Show the CPU memory map of all reg regions, with overlaps";
+    memmapCmd.usage = "memmap <filename>";
+    memmapCmd.handler = [this](const std::vector<std::string>& args) { return handleMemmap(args); };
+    commands_["memmap"] = memmapCmd;
     
     CLICommand helpCmd;
     helpCmd.name = "help";
@@ -309,6 +317,11 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
         std::cout << "  " << programName_ << " overlay board.dtb merged.dtb uart.dtbo sensor.dtbo\n";
         std::cout << "  " << programName_ << " overlay board.dts merged.dts uart.dtso\n";
+    } else if (command == "memmap") {
+        std::cout << "\nEvery reg entry is translated to a CPU address through the parent buses'\n";
+        std::cout << "ranges (like the kernel's of_translate_address) and listed by address.\n";
+        std::cout << "Overlapping regions are flagged. Entries that cannot be translated (e.g.\n";
+        std::cout << "devices on I2C/SPI buses) are listed separately with the reason.\n";
     } else if (command == "convert") {
         std::cout << "\nThe input format is detected from the file contents; the output\n";
         std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
@@ -856,6 +869,96 @@ int CLIApp::handleOverlay(const std::vector<std::string>& args) {
     printSuccess("Applied " + std::to_string(args.size() - 2) + " overlay(s): " +
                  std::to_string(diff.getAddedCount()) + " added, " + std::to_string(diff.getModifiedCount()) +
                  " modified, " + std::to_string(diff.getRemovedCount()) + " removed -> " + outputFile);
+    return EXIT_SUCCESS;
+}
+
+} // namespace DTE
+
+namespace DTE {
+
+int CLIApp::handleMemmap(const std::vector<std::string>& args) {
+    if (args.size() != 1) {
+        printError("Usage: " + commands_["memmap"].usage);
+        return EXIT_FAILURE;
+    }
+    if (!fileExists(args[0])) {
+        printError("File not found: " + args[0]);
+        return EXIT_FAILURE;
+    }
+    printInfo("Loading device tree from: " + args[0]);
+    if (!loadDeviceTree(args[0])) {
+        return EXIT_FAILURE;
+    }
+
+    struct Region {
+        uint64_t start;
+        uint64_t size;
+        bool hasSize;
+        std::string path;
+    };
+    std::vector<Region> regions;
+    std::vector<std::pair<std::string, std::string>> unmapped; // path, description
+
+    std::function<void(const std::shared_ptr<DeviceTreeNode>&)> walk = [&](const std::shared_ptr<DeviceTreeNode>& n) {
+        if (n->getParent() && static_cast<const DeviceTreeNode&>(*n).findProperty("reg")) {
+            std::vector<RegEntry> regs;
+            std::string error;
+            if (!decodeReg(n, regs, &error)) {
+                unmapped.emplace_back(n->getFullPath(), error);
+            }
+            for (const auto& r : regs) {
+                if (r.translated) {
+                    regions.push_back({r.cpuAddress, r.size, r.hasSize, n->getFullPath()});
+                } else {
+                    unmapped.emplace_back(n->getFullPath(), describeReg(r));
+                }
+            }
+        }
+        for (const auto& c : n->getChildren()) walk(c);
+    };
+    walk(deviceTree_->getRoot());
+
+    std::stable_sort(regions.begin(), regions.end(),
+                     [](const Region& a, const Region& b) { return a.start < b.start; });
+
+    uint64_t maxAddress = 0;
+    for (const auto& r : regions) maxAddress = std::max(maxAddress, r.start + (r.size ? r.size - 1 : 0));
+    const int width = maxAddress > 0xffffffffULL ? 16 : 8;
+    auto hex = [width](uint64_t v) {
+        std::ostringstream os;
+        os << "0x" << std::hex << std::setw(width) << std::setfill('0') << v;
+        return os.str();
+    };
+
+    std::cout << Colors::BOLD << "Memory map (" << regions.size() << " regions):" << Colors::RESET << "\n";
+    size_t overlaps = 0;
+    const Region* furthest = nullptr; // region reaching highest so far
+    for (const auto& r : regions) {
+        const uint64_t end = r.hasSize && r.size ? r.start + r.size - 1 : r.start;
+        std::cout << "  " << hex(r.start) << "-" << hex(end) << "  "
+                  << std::setw(width + 2) << std::setfill(' ') << std::left
+                  << (r.hasSize ? "0x" + [&] { std::ostringstream os; os << std::hex << r.size; return os.str(); }() : "-")
+                  << std::right << "  " << Colors::GREEN << r.path << Colors::RESET;
+        if (furthest) {
+            const uint64_t furthestEnd = furthest->start + (furthest->size ? furthest->size - 1 : 0);
+            if (r.start <= furthestEnd && r.size && furthest->size && furthest->path != r.path) {
+                std::cout << "  " << Colors::YELLOW << "overlaps " << furthest->path << Colors::RESET;
+                ++overlaps;
+            }
+        }
+        std::cout << "\n";
+        if (!furthest || end > furthest->start + (furthest->size ? furthest->size - 1 : 0)) furthest = &r;
+    }
+
+    if (!unmapped.empty()) {
+        std::cout << "\n" << Colors::BOLD << "Not translated (" << unmapped.size() << "):" << Colors::RESET << "\n";
+        for (const auto& [path, what] : unmapped) {
+            std::cout << "  " << Colors::GREEN << path << Colors::RESET << "  " << what << "\n";
+        }
+    }
+    if (overlaps) {
+        printWarning(std::to_string(overlaps) + " overlapping region(s)");
+    }
     return EXIT_SUCCESS;
 }
 
