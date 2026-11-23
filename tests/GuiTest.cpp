@@ -705,6 +705,28 @@ TEST_F(GuiTest, DetailsColumnDecodesRegAndRanges) {
               "0x50 (not memory-mapped: /soc@100000000/i2c@3000 has no 'ranges')");
 }
 
+TEST_F(GuiTest, DetailsColumnDecodesInterrupts) {
+    window_->loadDeviceTree(QString(TEST_DATA_DIR) + "/interrupts.dts");
+    auto* edit = window_->findChild<QLineEdit*>("findEdit");
+    const int col = PropertyTableWidget::DetailsColumn;
+
+    edit->setText("dual@");
+    auto dual = nodeAt(*window_, "/dual@3100");
+    EXPECT_EQ(props_->item(dual->propertyIndex("interrupts"), col)->text().toStdString(),
+              "tx: /interrupt-controller@1000 SPI 34 (hwirq 66), level high; "
+              "rx: /interrupt-controller@1000 SPI 35 (hwirq 67), edge rising");
+
+    edit->setText("ext@");
+    auto ext = nodeAt(*window_, "/ext@3200");
+    const int row = ext->propertyIndex("interrupts-extended");
+    EXPECT_EQ(props_->item(row, col)->text().toStdString(),
+              "/interrupt-controller@1000 PPI 9 (hwirq 25), level high, CPU mask 0xf; /gpio@2000 line 7, level low");
+
+    // Double-click goes to the (first) controller
+    emit props_->cellDoubleClicked(row, col);
+    EXPECT_EQ(tree_->currentItem()->toolTip(0), "/interrupt-controller@1000");
+}
+
 TEST_F(GuiTest, Screenshot) {
     const char* out = std::getenv("DTE_GUI_SCREENSHOT");
     if (!out) GTEST_SKIP() << "set DTE_GUI_SCREENSHOT to save one";

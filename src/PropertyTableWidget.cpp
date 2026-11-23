@@ -1,5 +1,6 @@
 #include "PropertyTableWidget.h"
 #include "Addresses.h"
+#include "Interrupts.h"
 #include <QHeaderView>
 #include <QTableWidgetItem>
 #include <QMessageBox>
@@ -133,6 +134,22 @@ void PropertyTableWidget::populateTable() {
                 targets << QString("⚠ %1").arg(QString::fromStdString(error));
                 broken = true;
             }
+        } else if ((prop.getName() == "interrupts" || prop.getName() == "interrupts-extended") && tree_ &&
+                   !(prop.getName() == "interrupts" && currentNode_->findProperty("interrupts-extended"))) {
+            std::vector<InterruptSpec> specs;
+            std::string error;
+            if (decodeInterrupts(*tree_, currentNode_, specs, &error)) {
+                for (const auto& spec : specs) {
+                    targets << QString::fromStdString(describeInterrupt(spec));
+                    if (!spec.problem.empty()) broken = true;
+                    if (firstTarget.isEmpty() && spec.controller) {
+                        firstTarget = QString::fromStdString(spec.controller->getFullPath());
+                    }
+                }
+            } else {
+                targets << QString("⚠ %1").arg(QString::fromStdString(error));
+                broken = true;
+            }
         } else if (prop.getName() == "ranges" && currentNode_->getParent()) {
             std::vector<RangeEntry> ranges;
             bool identity = false;
@@ -146,8 +163,9 @@ void PropertyTableWidget::populateTable() {
                 for (const auto& r : ranges) targets << QString::fromStdString(describeRange(r));
             }
         }
+        const bool decodedAsInterrupts = !targets.isEmpty() && prop.getName() == "interrupts-extended";
         for (const auto& ref : references_) {
-            if (ref.property != prop.getName()) continue;
+            if (ref.property != prop.getName() || decodedAsInterrupts) continue;
             if (!ref.problem.empty()) {
                 targets << QString("⚠ %1").arg(QString::fromStdString(ref.problem));
                 broken = true;

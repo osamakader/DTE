@@ -1153,6 +1153,7 @@ void MainWindow::updatePropertyTable() {
     }
     referencedByLabel_->setText(incoming == 0 ? QString("Referenced by: no other node")
                                               : QString("Referenced by %1:").arg(incoming));
+    propertyTable_->setTree(deviceTree_);
     propertyTable_->setNode(node, std::move(from));
 }
 

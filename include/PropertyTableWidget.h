@@ -17,6 +17,8 @@ public:
     void setNode(std::shared_ptr<DeviceTreeNode> node, std::vector<PhandleReference> references = {});
 
     enum Column { NameColumn, TypeColumn, ValueColumn, DetailsColumn };
+    // Tree the node belongs to (for interrupt decoding in Details)
+    void setTree(std::shared_ptr<DeviceTree> tree) { tree_ = std::move(tree); }
     // Path of the first resolved target of the property in `row`, or empty.
     QString referenceTarget(int row) const;
     void clearNode();
@@ -35,6 +37,7 @@ private slots:
 private:
     std::shared_ptr<DeviceTreeNode> currentNode_;
     std::vector<PhandleReference> references_;
+    std::shared_ptr<DeviceTree> tree_;
     void populateTable();
 };
 
