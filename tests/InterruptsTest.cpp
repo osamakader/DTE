@@ -151,3 +151,11 @@ TEST(InterruptDescriptions, FallsBackToRawCells) {
     EXPECT_EQ(describeSpecifier(*c, {7}), "line 7");
     EXPECT_EQ(describeSpecifier(*c, {7, 0x123}), "<0x7 0x123>"); // flags not a plain trigger type
 }
+
+#ifdef DTC_PATH
+TEST_F(InterruptsFromDts, FixtureValidatesCleanly) {
+    std::vector<std::string> issues;
+    for (const auto& i : tree_.check()) issues.push_back(i.toString());
+    EXPECT_EQ(issues, std::vector<std::string>{});
+}
+#endif

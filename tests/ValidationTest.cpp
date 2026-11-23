@@ -193,6 +193,32 @@ TEST(Validation, RangesAndTranslation) {
               "#address-cells + child #size-cells (1 + 1 + 1)");
 }
 
+TEST(Validation, InterruptsMustResolve) {
+    Fixture f;
+    // The fixture's interrupt-parent (phandle 1) has no #interrupt-cells yet
+    set(f.uart, "interrupts", Cells{0, 33, 4});
+    EXPECT_EQ(f.issues(), (std::vector<std::string>{
+                              "error: /soc/serial@10000000:interrupts: no interrupt parent found: interrupt-parent "
+                              "/soc/interrupt-controller@1000 has no #interrupt-cells"}));
+    set(f.intc, "#interrupt-cells", Cells{3});
+    EXPECT_EQ(f.issues(), (std::vector<std::string>{
+                              "error: /soc/serial@10000000:interrupts: /soc/interrupt-controller@1000 is neither an "
+                              "interrupt-controller nor has an interrupt-map"}));
+    set(f.intc, "interrupt-controller", std::string());
+    EXPECT_EQ(f.issues(), std::vector<std::string>{});
+    set(f.uart, "interrupts", Cells{0, 33});
+    EXPECT_EQ(f.issues(), (std::vector<std::string>{
+                              "error: /soc/serial@10000000:interrupts: 'interrupts' has 2 cells, which is not a "
+                              "multiple of #interrupt-cells = 3 of /soc/interrupt-controller@1000"}));
+}
+
+TEST(Validation, BrokenInterruptsExtendedReportedOnce) {
+    Fixture f;
+    set(f.uart, "interrupts-extended", Cells{0x42, 1});
+    EXPECT_EQ(f.issues(), (std::vector<std::string>{
+                              "error: /soc/serial@10000000:interrupts-extended: refers to phandle 0x42, which no node has"}));
+}
+
 TEST(Validation, CompatibleAndStatusValues) {
     Fixture f;
     set(f.uart, "compatible", Cells{1});

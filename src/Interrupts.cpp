@@ -202,7 +202,18 @@ bool decodeInterrupts(const DeviceTree& tree, const std::shared_ptr<DeviceTreeNo
     if (!interrupts->isCells()) return fail("'interrupts' must be a list of cells");
 
     auto parent = interruptParentOf(tree, node);
-    if (!parent) return fail("no interrupt parent found (no interrupt-parent and no ancestor with #interrupt-cells)");
+    if (!parent) {
+        // Point at an interrupt-parent that was skipped for lacking #interrupt-cells
+        for (auto n = node; n; n = n->getParent()) {
+            if (!prop(n, "interrupt-parent")) continue;
+            if (auto target = byPhandle(tree, n); target && !prop(target, "#interrupt-cells")) {
+                return fail("no interrupt parent found: interrupt-parent " + target->getFullPath() +
+                            " has no #interrupt-cells");
+            }
+            break;
+        }
+        return fail("no interrupt parent found (no interrupt-parent and no ancestor with #interrupt-cells)");
+    }
     uint32_t intCells = 0;
     if (!singleCell(parent, "#interrupt-cells", intCells) || intCells == 0) {
         return fail("interrupt parent " + parent->getFullPath() + " has no valid #interrupt-cells");

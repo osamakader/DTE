@@ -3,6 +3,7 @@
 #include "DeviceTree.h"
 #include "DtsValue.h"
 #include "Addresses.h"
+#include "Interrupts.h"
 
 #include <algorithm>
 #include <cctype>
@@ -30,6 +31,7 @@ constexpr uint32_t kDefaultSizeCells = 1;
 class Checker {
 public:
     std::vector<ValidationIssue> run(const DeviceTree& tree) {
+        tree_ = &tree;
         const auto root = tree.getRoot();
         // Problems found while decoding phandle references, by source node
         for (auto& ref : tree.references()) {
@@ -50,6 +52,7 @@ private:
     std::map<uint32_t, std::string> phandles_; // value -> first node path
     std::shared_ptr<DeviceTreeNode> root_;
     std::multimap<const DeviceTreeNode*, PhandleReference> referenceProblems_;
+    const DeviceTree* tree_ = nullptr;
 
     void add(ValidationIssue::Severity sev, const std::string& path, const std::string& prop,
              const std::string& msg) {
@@ -141,6 +144,7 @@ private:
         checkCompatible(path, n);
         checkStatus(path, n);
         checkReferences(path, n);
+        checkInterrupts(path, node);
         if (parent && !parent->getParent() && n.getName() == "aliases") checkAliases(path, n);
 
         for (const auto& child : n.getChildren()) visit(child);
@@ -265,6 +269,28 @@ private:
         auto [begin, end] = referenceProblems_.equal_range(&n);
         for (auto it = begin; it != end; ++it) {
             error(path, it->second.property, it->second.problem);
+        }
+    }
+
+    // interrupts / interrupts-extended must resolve to an interrupt
+    // controller (through interrupt-map nexus nodes if needed)
+    void checkInterrupts(const std::string& path, const std::shared_ptr<DeviceTreeNode>& node) {
+        const auto& n = static_cast<const DeviceTreeNode&>(*node);
+        if (!n.findProperty("interrupts") && !n.findProperty("interrupts-extended")) return;
+        std::vector<InterruptSpec> specs;
+        std::string err;
+        if (!decodeInterrupts(*tree_, node, specs, &err)) {
+            error(path, n.findProperty("interrupts-extended") ? "interrupts-extended" : "interrupts", err);
+            return;
+        }
+        auto [begin, end] = referenceProblems_.equal_range(&n);
+        for (const auto& spec : specs) {
+            if (spec.problem.empty()) continue;
+            bool reported = false; // already flagged as a broken phandle reference
+            for (auto it = begin; it != end; ++it) {
+                if (it->second.property == spec.property && it->second.problem == spec.problem) reported = true;
+            }
+            if (!reported) error(path, spec.property, spec.problem);
         }
     }
 
