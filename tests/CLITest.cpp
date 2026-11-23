@@ -280,3 +280,20 @@ TEST_F(CLITest, MemmapCommand) {
     EXPECT_NE(o.stdoutData.find("/b@1080  overlaps /a@1000"), std::string::npos) << o.stdoutData;
     EXPECT_NE(o.stderrData.find("1 overlapping region(s)"), std::string::npos);
 }
+
+TEST_F(CLITest, IrqsCommand) {
+    auto r = cli({"irqs", kData + "/interrupts.dts"});
+    ASSERT_EQ(r.exitCode, 0) << r.stderrData;
+    EXPECT_NE(r.stdoutData.find("/interrupt-controller@1000 (7):"), std::string::npos) << r.stdoutData;
+    EXPECT_NE(r.stdoutData.find("SPI 50 (hwirq 82), level high via /nexus@4000  /nexus@4000/dev@1"), std::string::npos)
+        << r.stdoutData;
+    EXPECT_NE(r.stdoutData.find("/dual@3100 [rx]"), std::string::npos);
+    EXPECT_NE(r.stderrData.find("9 interrupt(s) on 2 controller(s)"), std::string::npos) << r.stderrData;
+
+    auto s = cli({"irqs", tmp_.write("s.dts", "/dts-v1/;\n/ { intc: intc { interrupt-controller; "
+                                              "#interrupt-cells = <2>; }; a { interrupt-parent = <&intc>; "
+                                              "interrupts = <5 4>; }; b { interrupt-parent = <&intc>; "
+                                              "interrupts = <5 8>; }; c { interrupts = <1>; }; };\n")});
+    EXPECT_NE(s.stdoutData.find("/b  shared with /a"), std::string::npos) << s.stdoutData;
+    EXPECT_NE(s.stdoutData.find("Unresolved (1):"), std::string::npos) << s.stdoutData;
+}

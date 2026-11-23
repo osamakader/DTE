@@ -287,6 +287,16 @@ listed separately with the reason. The GUI shows the same decoding in the
 property table's Details column, and `validate` warns about addresses outside
 `ranges`. Addresses up to 64 bits are supported (not 3-cell PCI addresses).
 
+#### `irqs <filename>`
+List all interrupts grouped by the interrupt controller they end up at,
+following the kernel's resolution: `interrupt-parent` (inherited, or the
+nearest ancestor with `#interrupt-cells`), `interrupts-extended`, and
+`interrupt-map` / `interrupt-map-mask` nexus nodes. ARM GIC specifiers are
+explained (`SPI 33 (hwirq 65), level high`), two-cell specifiers as line and
+trigger, and `interrupt-names` label the entries. Shared lines and interrupts
+that do not resolve are flagged. The GUI's Details column shows the same for
+`interrupts` properties, and `validate` reports unresolvable interrupts.
+
 ## Examples
 
 ### Basic Device Tree Analysis

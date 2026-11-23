@@ -1,6 +1,7 @@
 #include "CLIApp.h"
 #include "Overlay.h"
 #include "Addresses.h"
+#include "Interrupts.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -229,6 +230,13 @@ void CLIApp::setupCommands() {
     memmapCmd.usage = "memmap <filename>";
     memmapCmd.handler = [this](const std::vector<std::string>& args) { return handleMemmap(args); };
     commands_["memmap"] = memmapCmd;
+
+    CLICommand irqsCmd;
+    irqsCmd.name = "irqs";
+    irqsCmd.description = "List interrupts by controller, resolved through interrupt-map";
+    irqsCmd.usage = "irqs <filename>";
+    irqsCmd.handler = [this](const std::vector<std::string>& args) { return handleIrqs(args); };
+    commands_["irqs"] = irqsCmd;
     
     CLICommand helpCmd;
     helpCmd.name = "help";
@@ -959,6 +967,87 @@ int CLIApp::handleMemmap(const std::vector<std::string>& args) {
     if (overlaps) {
         printWarning(std::to_string(overlaps) + " overlapping region(s)");
     }
+    return EXIT_SUCCESS;
+}
+
+} // namespace DTE
+
+namespace DTE {
+
+int CLIApp::handleIrqs(const std::vector<std::string>& args) {
+    if (args.size() != 1) {
+        printError("Usage: " + commands_["irqs"].usage);
+        return EXIT_FAILURE;
+    }
+    if (!fileExists(args[0])) {
+        printError("File not found: " + args[0]);
+        return EXIT_FAILURE;
+    }
+    printInfo("Loading device tree from: " + args[0]);
+    if (!loadDeviceTree(args[0])) {
+        return EXIT_FAILURE;
+    }
+
+    struct Line {
+        std::vector<uint32_t> specifier;
+        std::string description;
+        std::string user; // node path [name]
+    };
+    std::map<std::string, std::vector<Line>> byController;
+    std::vector<std::string> unresolved;
+
+    std::function<void(const std::shared_ptr<DeviceTreeNode>&)> walk = [&](const std::shared_ptr<DeviceTreeNode>& n) {
+        const auto& node = static_cast<const DeviceTreeNode&>(*n);
+        if (node.findProperty("interrupts") || node.findProperty("interrupts-extended")) {
+            std::vector<InterruptSpec> specs;
+            std::string error;
+            if (!decodeInterrupts(*deviceTree_, n, specs, &error)) {
+                unresolved.push_back(n->getFullPath() + "  " + error);
+            }
+            for (const auto& spec : specs) {
+                std::string user = n->getFullPath() + (spec.name.empty() ? "" : " [" + spec.name + "]");
+                if (!spec.problem.empty()) {
+                    unresolved.push_back(user + "  " + spec.problem);
+                    continue;
+                }
+                std::string description = describeSpecifier(*spec.controller, spec.specifier);
+                for (const auto& via : spec.route) description += " via " + via;
+                byController[spec.controller->getFullPath()].push_back({spec.specifier, description, user});
+            }
+        }
+        for (const auto& c : n->getChildren()) walk(c);
+    };
+    walk(deviceTree_->getRoot());
+
+    size_t total = 0, shared = 0;
+    for (auto& [controller, lines] : byController) {
+        std::stable_sort(lines.begin(), lines.end(),
+                         [](const Line& a, const Line& b) { return a.specifier < b.specifier; });
+        std::cout << Colors::BOLD << controller << " (" << lines.size() << "):" << Colors::RESET << "\n";
+        size_t width = 0;
+        for (const auto& l : lines) width = std::max(width, l.description.size());
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const auto& l = lines[i];
+            std::cout << "  " << std::left << std::setw(static_cast<int>(width)) << l.description << std::right
+                      << "  " << Colors::GREEN << l.user << Colors::RESET;
+            // Same line (all cells but the trigger/flags cell) as the previous entry
+            auto line = [](const std::vector<uint32_t>& s) {
+                return s.size() >= 2 ? std::vector<uint32_t>(s.begin(), s.end() - 1) : s;
+            };
+            if (i > 0 && line(lines[i - 1].specifier) == line(l.specifier)) {
+                std::cout << "  " << Colors::YELLOW << "shared with " << lines[i - 1].user << Colors::RESET;
+                ++shared;
+            }
+            std::cout << "\n";
+        }
+        total += lines.size();
+    }
+    if (!unresolved.empty()) {
+        std::cout << "\n" << Colors::BOLD << "Unresolved (" << unresolved.size() << "):" << Colors::RESET << "\n";
+        for (const auto& u : unresolved) std::cout << "  " << Colors::RED << u << Colors::RESET << "\n";
+    }
+    printInfo(std::to_string(total) + " interrupt(s) on " + std::to_string(byController.size()) + " controller(s)" +
+              (shared ? ", " + std::to_string(shared) + " shared line(s)" : ""));
     return EXIT_SUCCESS;
 }
 

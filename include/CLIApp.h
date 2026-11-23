@@ -38,6 +38,7 @@ private:
     int handleRefs(const std::vector<std::string>& args);
     int handleOverlay(const std::vector<std::string>& args);
     int handleMemmap(const std::vector<std::string>& args);
+    int handleIrqs(const std::vector<std::string>& args);
     int handleHelp(const std::vector<std::string>& args);
 
     // Utility methods
