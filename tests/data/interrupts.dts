@@ -1,0 +1,70 @@
+/dts-v1/;
+
+/ {
+	compatible = "acme,interrupts";
+	model = "Interrupt decoding test board";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&gic>;
+
+	gic: interrupt-controller@1000 {
+		compatible = "arm,gic-400";
+		reg = <0x1000 0x1000>;
+		interrupt-controller;
+		#interrupt-cells = <3>;
+		#address-cells = <0>;
+	};
+
+	gpio0: gpio@2000 {
+		reg = <0x2000 0x100>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		interrupts = <0 10 4>;
+	};
+
+	/* interrupt parent inherited from the root */
+	serial@3000 {
+		reg = <0x3000 0x100>;
+		interrupts = <0 33 4>;
+	};
+
+	dual@3100 {
+		reg = <0x3100 0x100>;
+		interrupts = <0 34 4>, <0 35 1>;
+		interrupt-names = "tx", "rx";
+	};
+
+	/* explicit interrupt-parent */
+	button {
+		interrupt-parent = <&gpio0>;
+		interrupts = <5 2>;
+	};
+
+	ext@3200 {
+		reg = <0x3200 0x100>;
+		interrupts-extended = <&gic 1 9 0xf04>, <&gpio0 7 8>;
+	};
+
+	/* interrupt nexus: children are routed to the GIC through interrupt-map */
+	nexus@4000 {
+		reg = <0x4000 0x100>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		#interrupt-cells = <1>;
+		interrupt-map-mask = <0xf 0x7>;
+		interrupt-map = <0x1 0x1 &gic 0 50 4>,
+		                <0x2 0x1 &gic 0 51 4>;
+
+		dev@1 {
+			reg = <0x1>;
+			interrupts = <1>;
+		};
+
+		dev@12 {
+			reg = <0x12>;   /* masked to 0x2 */
+			interrupts = <0x9>; /* masked to 0x1 */
+		};
+	};
+};

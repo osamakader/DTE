@@ -7,6 +7,7 @@ add_library(dte-core STATIC
     Validation.cpp
     References.cpp
     Addresses.cpp
+    Interrupts.cpp
     Overlay.cpp
     DeviceTreeDiff.cpp
 )

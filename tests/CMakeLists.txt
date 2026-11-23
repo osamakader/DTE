@@ -20,6 +20,7 @@ add_executable(dte-tests
     OverlayTest.cpp
     SystemTreeTest.cpp
     AddressesTest.cpp
+    InterruptsTest.cpp
     ProcessTest.cpp
     PropertyTest.cpp
 )
