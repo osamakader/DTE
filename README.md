@@ -200,6 +200,20 @@ DTB and DTS; a DTS and its compiled DTB compare as identical.
 
 **Exit status** (like `diff(1)`): `0` identical, `1` different, `2` error.
 
+`--overlay FILE.dtso` also writes the difference as an overlay source that
+turns the first tree into the second, e.g. to capture changes made to a board
+as an overlay:
+
+```bash
+./bin/dte-cli diff vendor.dtb my-board.dts --overlay my-changes.dtso
+./bin/dte-cli overlay vendor.dtb result.dtb my-changes.dtso
+```
+
+New nodes referenced through known phandle properties get labels, so the
+references survive phandle renumbering. Overlays cannot delete properties or
+nodes, so removals are reported as warnings, as are phandles that would have to
+be added to existing nodes.
+
 #### `export <input_file> <format> <output_file>`
 Export device tree to different formats.
 

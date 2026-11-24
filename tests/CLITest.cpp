@@ -402,3 +402,21 @@ TEST_F(CLITest, JsonOverlapsAndSharedLines) {
     EXPECT_EQ(i["controllers"]["/intc"][1]["shared_with"], "/a");
 }
 #endif
+
+TEST_F(CLITest, DiffWritesOverlay) {
+    const auto base = tmp_.write("base.dts", "/dts-v1/;\n/ { model = \"A\"; soc { }; };\n");
+    const auto target = tmp_.write("target.dts", "/dts-v1/;\n/ { model = \"B\"; soc { dev { status = \"okay\"; }; }; };\n");
+    const auto overlay = (tmp_.path() / "changes.dtso").string();
+    auto r = cli({"diff", base, target, "--overlay", overlay});
+    EXPECT_EQ(r.exitCode, 1); // the trees differ
+    EXPECT_NE(r.stderrData.find("Wrote overlay"), std::string::npos) << r.stderrData;
+
+    const auto applied = (tmp_.path() / "applied.dts").string();
+    ASSERT_EQ(cli({"overlay", base, applied, overlay}).exitCode, 0);
+    EXPECT_EQ(cli({"diff", applied, target}).exitCode, 0); // overlay reproduces the target
+
+    const auto removal = tmp_.write("removal.dts", "/dts-v1/;\n/ { soc { }; };\n");
+    auto w = cli({"diff", base, removal, "--overlay=" + overlay});
+    EXPECT_NE(w.stderrData.find("/:model was removed; overlays cannot delete properties"), std::string::npos)
+        << w.stderrData;
+}
