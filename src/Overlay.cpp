@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
+#include <cstdio>
+#include <sstream>
 #include <stdexcept>
 
 namespace DTE {
@@ -215,6 +217,169 @@ void mergeSymbols(const std::shared_ptr<DeviceTreeNode>& overlayRoot, const std:
 }
 
 } // namespace
+
+namespace {
+
+// State for generateOverlay()
+class OverlayWriter {
+public:
+    OverlayWriter(const DeviceTree& base, const DeviceTree& target, std::vector<std::string>& warnings)
+        : base_(base), target_(target), warnings_(warnings) {
+        // References whose target node is new (not in the base) become
+        // label references; remember the cells to replace.
+        for (const auto& ref : target.references()) {
+            if (!ref.problem.empty() || !ref.target) continue;
+            const std::string targetPath = ref.target->getFullPath();
+            if (!base.findNodeByPath(targetPath)) {
+                labelCells_[{ref.source.get(), ref.property}][ref.cellIndex] = labelFor(ref.target);
+            } else {
+                checkExistingReference(ref);
+            }
+        }
+    }
+
+    std::string run() {
+        out_ << "/dts-v1/;\n/plugin/;\n";
+        visit(target_.getRoot(), base_.getRoot());
+        return out_.str();
+    }
+
+private:
+    const DeviceTree& base_;
+    const DeviceTree& target_;
+    std::vector<std::string>& warnings_;
+    std::ostringstream out_;
+    std::map<std::pair<const DeviceTreeNode*, std::string>, std::map<size_t, std::string>> labelCells_;
+    std::map<const DeviceTreeNode*, std::string> labels_;
+
+    static bool isPhandleProp(const std::string& name) { return name == "phandle" || name == "linux,phandle"; }
+
+    std::string labelFor(const std::shared_ptr<DeviceTreeNode>& node) {
+        auto it = labels_.find(node.get());
+        if (it != labels_.end()) return it->second;
+        const auto* ph = static_cast<const DeviceTreeNode&>(*node).findProperty("phandle");
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "n%x", ph && ph->isCells() && !ph->getValueAsCells().empty()
+                                                     ? ph->getValueAsCells()[0]
+                                                     : static_cast<unsigned>(labels_.size()));
+        return labels_[node.get()] = buf;
+    }
+
+    // A reference to an existing node keeps its number, which must be the
+    // base node's phandle.
+    void checkExistingReference(const PhandleReference& ref) {
+        auto baseNode = base_.findNodeByPath(ref.target->getFullPath());
+        const auto* ph = static_cast<const DeviceTreeNode&>(*baseNode).findProperty("phandle");
+        if (!ph) ph = static_cast<const DeviceTreeNode&>(*baseNode).findProperty("linux,phandle");
+        const bool same = ph && ph->isCells() && ph->getValueAsCells() == std::vector<uint32_t>{ref.phandle};
+        if (!same && changedOrNew(ref)) {
+            warnings_.push_back(ref.source->getFullPath() + ":" + ref.property + " refers to " +
+                                ref.target->getFullPath() + ", which has " +
+                                (ph ? std::string("a different phandle") : std::string("no phandle")) +
+                                " in the base; the reference is written as a plain number");
+        }
+    }
+
+    // Only references in properties the overlay writes matter
+    bool changedOrNew(const PhandleReference& ref) const {
+        auto baseNode = base_.findNodeByPath(ref.source->getFullPath());
+        if (!baseNode) return true;
+        const auto* before = static_cast<const DeviceTreeNode&>(*baseNode).findProperty(ref.property);
+        const auto* after = static_cast<const DeviceTreeNode&>(*ref.source).findProperty(ref.property);
+        return !before || !after || !(*before == *after);
+    }
+
+    std::string valueText(const DeviceTreeNode& node, const DeviceTreeProperty& prop) const {
+        auto it = labelCells_.find({&node, prop.getName()});
+        if (it == labelCells_.end() || !prop.isCells()) return prop.getValueAsString();
+        std::ostringstream os;
+        os << "<";
+        const auto cells = prop.getValueAsCells();
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (i) os << " ";
+            auto label = it->second.find(i);
+            if (label != it->second.end()) {
+                os << "&" << label->second;
+            } else {
+                os << "0x" << std::hex << cells[i] << std::dec;
+            }
+        }
+        os << ">";
+        return os.str();
+    }
+
+    void writeProperty(const DeviceTreeNode& node, const DeviceTreeProperty& prop, const std::string& indent) {
+        out_ << indent << prop.getName();
+        if (!prop.isEmpty()) out_ << " = " << valueText(node, prop);
+        out_ << ";\n";
+    }
+
+    void writeNewNode(const std::shared_ptr<DeviceTreeNode>& node, const std::string& indent) {
+        out_ << indent;
+        if (auto it = labels_.find(node.get()); it != labels_.end()) out_ << it->second << ": ";
+        out_ << node->getName() << " {\n";
+        for (const auto& prop : node->getProperties()) {
+            if (isPhandleProp(prop.getName())) continue; // dtc assigns new ones
+            writeProperty(*node, prop, indent + "\t");
+        }
+        for (const auto& child : node->getChildren()) writeNewNode(child, indent + "\t");
+        out_ << indent << "};\n";
+    }
+
+    void visit(const std::shared_ptr<DeviceTreeNode>& target, const std::shared_ptr<DeviceTreeNode>& base) {
+        const auto& t = static_cast<const DeviceTreeNode&>(*target);
+        const auto& b = static_cast<const DeviceTreeNode&>(*base);
+        const std::string path = target->getFullPath();
+
+        std::vector<const DeviceTreeProperty*> changed;
+        for (const auto& prop : t.getProperties()) {
+            const auto* old = b.findProperty(prop.getName());
+            if (old && *old == prop) continue;
+            if (isPhandleProp(prop.getName())) {
+                warnings_.push_back(path + ": phandle changed or added; overlays cannot set it for existing nodes");
+                continue;
+            }
+            changed.push_back(&prop);
+        }
+        for (const auto& prop : b.getProperties()) {
+            if (!t.findProperty(prop.getName())) {
+                warnings_.push_back(path + ":" + prop.getName() + " was removed; overlays cannot delete properties");
+            }
+        }
+        std::vector<std::shared_ptr<DeviceTreeNode>> added;
+        for (const auto& child : t.getChildren()) {
+            if (!b.findChild(child->getName())) added.push_back(child);
+        }
+        for (const auto& child : b.getChildren()) {
+            if (!t.findChild(child->getName())) {
+                warnings_.push_back(child->getFullPath() + " was removed; overlays cannot delete nodes");
+            }
+        }
+
+        if (!changed.empty() || !added.empty()) {
+            out_ << "\n&{" << path << "} {\n";
+            for (const auto* prop : changed) writeProperty(t, *prop, "\t");
+            for (const auto& child : added) {
+                if (!changed.empty() || child != added.front()) out_ << "\n";
+                writeNewNode(child, "\t");
+            }
+            out_ << "};\n";
+        }
+
+        for (const auto& child : t.getChildren()) {
+            if (auto baseChild = b.findChild(child->getName())) visit(child, baseChild);
+        }
+    }
+};
+
+} // namespace
+
+std::string generateOverlay(const DeviceTree& base, const DeviceTree& target, std::vector<std::string>* warnings) {
+    std::vector<std::string> local;
+    auto& w = warnings ? *warnings : local;
+    if (!base.getRoot() || !target.getRoot()) return "/dts-v1/;\n/plugin/;\n";
+    return OverlayWriter(base, target, w).run();
+}
 
 SymbolMap symbolsOf(const DeviceTree& tree) {
     SymbolMap out;

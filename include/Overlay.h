@@ -49,6 +49,17 @@ SymbolMap baseSymbolsFor(const DeviceTree& base, const std::string& filename, co
 bool loadOverlay(DeviceTree& overlay, const std::string& filename, const LoadOptions& options = {},
                  std::string* error = nullptr);
 
+// Writes an overlay source (/plugin/) that turns `base` into `target`:
+// one `&{/path} { ... };` per existing node with added or changed
+// properties or new child nodes (new subtrees are written whole).
+// References to new nodes are written as labels (&n5), so dtc creates
+// __local_fixups__ and they survive phandle renumbering; references to
+// existing nodes keep the base's phandle numbers.
+//
+// Overlays cannot delete properties or nodes; such differences, and
+// references that cannot be expressed, are reported in `warnings`.
+std::string generateOverlay(const DeviceTree& base, const DeviceTree& target, std::vector<std::string>* warnings = nullptr);
+
 } // namespace DTE
 
 #endif // DTE_OVERLAY_H
