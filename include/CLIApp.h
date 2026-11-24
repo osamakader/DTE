@@ -39,6 +39,10 @@ private:
     int handleOverlay(const std::vector<std::string>& args);
     int handleMemmap(const std::vector<std::string>& args);
     int handleIrqs(const std::vector<std::string>& args);
+    int handleGet(const std::vector<std::string>& args);
+
+    // Node by path, or by alias name (looked up in /aliases)
+    std::shared_ptr<DeviceTreeNode> resolveNode(const std::string& pathOrAlias) const;
     int handleHelp(const std::vector<std::string>& args);
 
     // Utility methods
@@ -67,6 +71,7 @@ private:
     // Member variables
     std::string programName_;
     std::vector<std::string> includePaths_;
+    bool json_ = false; // --json: machine-readable output on stdout
     std::vector<std::string> args_;
     std::map<std::string, CLICommand> commands_;
     std::shared_ptr<DeviceTree> deviceTree_;

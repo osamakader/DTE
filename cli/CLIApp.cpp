@@ -2,6 +2,7 @@
 #include "Overlay.h"
 #include "Addresses.h"
 #include "Interrupts.h"
+#include "Escape.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <functional>
 #include <unistd.h>
 #include <filesystem>
+#include <set>
 
 namespace DTE {
 
@@ -110,6 +112,8 @@ bool CLIApp::parseGlobalOptions() {
             includePaths_.push_back(a.substr(2));
         } else if (a == "--no-color") {
             Colors::disableColors();
+        } else if (a == "--json") {
+            json_ = true;
         } else {
             rest.push_back(a);
         }
@@ -149,6 +153,13 @@ int CLIApp::run() {
         return EXIT_FAILURE;
     }
     
+    // Commands that can print JSON
+    static const std::set<std::string> jsonCommands = {"get"};
+    if (json_ && !jsonCommands.count(command)) {
+        printError("--json is not supported by '" + command + "'");
+        return EXIT_FAILURE;
+    }
+
     // Extract command arguments
     std::vector<std::string> cmdArgs(args_.begin() + 1, args_.end());
     
@@ -237,6 +248,13 @@ void CLIApp::setupCommands() {
     irqsCmd.usage = "irqs <filename>";
     irqsCmd.handler = [this](const std::vector<std::string>& args) { return handleIrqs(args); };
     commands_["irqs"] = irqsCmd;
+
+    CLICommand getCmd;
+    getCmd.name = "get";
+    getCmd.description = "Print a property value, or a node's properties and children";
+    getCmd.usage = "get <filename> <path|alias> [property]";
+    getCmd.handler = [this](const std::vector<std::string>& args) { return handleGet(args); };
+    commands_["get"] = getCmd;
     
     CLICommand helpCmd;
     helpCmd.name = "help";
@@ -263,6 +281,7 @@ void CLIApp::printUsage() const {
     
     std::cout << "\n" << Colors::BOLD << "Global options:" << Colors::RESET << "\n";
     std::cout << "  -I, --include DIR  Add an include directory for DTS sources (repeatable)\n";
+    std::cout << "  --json             Machine-readable output (get, ...)\n";
     std::cout << "  --no-color         Disable colored output (also: NO_COLOR=1)\n";
     std::cout << "\nUse '" << programName_ << " help <command>' for detailed help.\n";
     std::cout << "Use '" << programName_ << " --version' to show version information.\n";
@@ -330,6 +349,15 @@ void CLIApp::printHelp(const std::string& command) const {
         std::cout << "ranges (like the kernel's of_translate_address) and listed by address.\n";
         std::cout << "Overlapping regions are flagged. Entries that cannot be translated (e.g.\n";
         std::cout << "devices on I2C/SPI buses) are listed separately with the reason.\n";
+    } else if (command == "get") {
+        std::cout << "\nWith a property, prints its value in DTS syntax (nothing for an empty\n";
+        std::cout << "property); without, lists the node's properties and its children (name/).\n";
+        std::cout << "The path may also be an alias name. Exit status 1 if not found.\n";
+        std::cout << "With --json the value uses the export schema's mapping.\n";
+        std::cout << "\n" << Colors::BOLD << "Examples:" << Colors::RESET << "\n";
+        std::cout << "  " << programName_ << " get board.dtb / model\n";
+        std::cout << "  " << programName_ << " get board.dtb serial0 status\n";
+        std::cout << "  " << programName_ << " --json get board.dtb /soc/serial@10000000\n";
     } else if (command == "convert") {
         std::cout << "\nThe input format is detected from the file contents; the output\n";
         std::cout << "format from the extension (.dtb/.dtbo or .dts/.dtsi/.dtso).\n";
@@ -1048,6 +1076,82 @@ int CLIApp::handleIrqs(const std::vector<std::string>& args) {
     }
     printInfo(std::to_string(total) + " interrupt(s) on " + std::to_string(byController.size()) + " controller(s)" +
               (shared ? ", " + std::to_string(shared) + " shared line(s)" : ""));
+    return EXIT_SUCCESS;
+}
+
+} // namespace DTE
+
+namespace DTE {
+
+std::shared_ptr<DeviceTreeNode> CLIApp::resolveNode(const std::string& pathOrAlias) const {
+    if (!deviceTree_) return nullptr;
+    if (!pathOrAlias.empty() && pathOrAlias[0] == '/') return deviceTree_->findNodeByPath(pathOrAlias);
+    auto aliases = deviceTree_->findNodeByPath("/aliases");
+    if (!aliases) return nullptr;
+    const auto* alias = static_cast<const DeviceTreeNode&>(*aliases).findProperty(pathOrAlias);
+    if (!alias || !alias->isString() || alias->isEmpty()) return nullptr;
+    return deviceTree_->findNodeByPath(std::get<std::string>(alias->getValue()));
+}
+
+int CLIApp::handleGet(const std::vector<std::string>& args) {
+    if (args.size() < 2 || args.size() > 3) {
+        printError("Usage: " + commands_["get"].usage);
+        return EXIT_FAILURE;
+    }
+    if (!fileExists(args[0])) {
+        printError("File not found: " + args[0]);
+        return EXIT_FAILURE;
+    }
+    if (!loadDeviceTree(args[0])) {
+        return EXIT_FAILURE;
+    }
+    auto node = resolveNode(args[1]);
+    if (!node) {
+        printError("Node not found: " + args[1]);
+        return EXIT_FAILURE;
+    }
+    const auto& n = static_cast<const DeviceTreeNode&>(*node);
+    using detail::jsonQuote;
+
+    if (args.size() == 3) {
+        const auto* prop = n.findProperty(args[2]);
+        if (!prop) {
+            printError("Property not found: " + node->getFullPath() + ":" + args[2]);
+            return EXIT_FAILURE;
+        }
+        if (json_) {
+            std::cout << "{\"path\": " << jsonQuote(node->getFullPath()) << ", \"property\": "
+                      << jsonQuote(prop->getName()) << ", \"value\": " << propertyValueToJson(prop->getValue())
+                      << "}\n";
+        } else {
+            std::cout << prop->getValueAsString() << "\n";
+        }
+        return EXIT_SUCCESS;
+    }
+
+    if (json_) {
+        std::cout << "{\"path\": " << jsonQuote(node->getFullPath()) << ", \"properties\": {";
+        const auto& props = n.getProperties();
+        for (size_t i = 0; i < props.size(); ++i) {
+            std::cout << (i ? ", " : "") << jsonQuote(props[i].getName()) << ": "
+                      << propertyValueToJson(props[i].getValue());
+        }
+        std::cout << "}, \"children\": [";
+        const auto& children = n.getChildren();
+        for (size_t i = 0; i < children.size(); ++i) {
+            std::cout << (i ? ", " : "") << jsonQuote(children[i]->getName());
+        }
+        std::cout << "]}\n";
+        return EXIT_SUCCESS;
+    }
+    for (const auto& prop : n.getProperties()) {
+        std::cout << prop.getName();
+        if (!prop.isEmpty()) std::cout << " = " << prop.getValueAsString();
+        std::cout << ";\n";
+    }
+    for (const auto& child : n.getChildren()) {
+        std::cout << child->getName() << "/\n";
+    }
     return EXIT_SUCCESS;
 }
 

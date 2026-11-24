@@ -657,6 +657,12 @@ void writeYamlNode(std::ostream& os, const DeviceTreeNode& node, const std::stri
 
 } // namespace
 
+std::string propertyValueToJson(const PropertyValue& value) {
+    std::ostringstream os;
+    writeInlineValue(os, DeviceTreeProperty("value", value));
+    return os.str();
+}
+
 std::string DeviceTree::exportAsJSON() const {
     std::ostringstream os;
     os << "{\n";

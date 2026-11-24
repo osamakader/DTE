@@ -66,6 +66,11 @@ private:
 std::vector<uint8_t> propertyValueToBytes(const PropertyValue& value);
 PropertyValue propertyValueFromBytes(const uint8_t* data, size_t size);
 
+// A value as JSON, with the export schema's mapping: string -> string,
+// string list -> array of strings, cells / bytes -> array of numbers,
+// empty property -> "".
+std::string propertyValueToJson(const PropertyValue& value);
+
 // Quotes and escapes a string for DTS output (\\, \", \n, \t, \xNN).
 std::string quoteDtsString(const std::string& s);
 

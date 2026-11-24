@@ -297,3 +297,40 @@ TEST_F(CLITest, IrqsCommand) {
     EXPECT_NE(s.stdoutData.find("/b  shared with /a"), std::string::npos) << s.stdoutData;
     EXPECT_NE(s.stdoutData.find("Unresolved (1):"), std::string::npos) << s.stdoutData;
 }
+
+TEST_F(CLITest, GetCommand) {
+    const std::string file = kData + "/board.dts";
+    auto v = cli({"get", file, "/", "model"});
+    EXPECT_EQ(v.exitCode, 0);
+    EXPECT_EQ(v.stdoutData, "\"ACME Widget Board\"\n");
+    EXPECT_EQ(v.stderrData, ""); // quiet, for scripts
+
+    // Aliases work as paths
+    EXPECT_EQ(cli({"get", file, "serial0", "status"}).stdoutData, "\"okay\"\n");
+    EXPECT_EQ(cli({"get", file, "/cpus/cpu@0", "reg"}).stdoutData, "<0x0>\n");
+    EXPECT_EQ(cli({"get", file, "/soc/interrupt-controller@1000", "interrupt-controller"}).stdoutData, "\n");
+
+    auto node = cli({"get", file, "/cpus"});
+    EXPECT_EQ(node.stdoutData, "#address-cells = <0x1>;\n#size-cells = <0x0>;\ncpu@0/\ncpu@1/\n");
+
+    EXPECT_EQ(cli({"get", file, "/nope"}).exitCode, 1);
+    auto missing = cli({"get", file, "/", "nope"});
+    EXPECT_EQ(missing.exitCode, 1);
+    EXPECT_NE(missing.stderrData.find("Property not found: /:nope"), std::string::npos);
+}
+
+TEST_F(CLITest, GetJson) {
+    const std::string file = kData + "/board.dts";
+    auto r = cli({"--json", "get", file, "/", "compatible"});
+    ASSERT_EQ(r.exitCode, 0);
+    EXPECT_EQ(r.stdoutData,
+              "{\"path\": \"/\", \"property\": \"compatible\", \"value\": [\"acme,widget-board\", \"acme,widget\"]}\n");
+    auto n = cli({"get", "--json", file, "/cpus/cpu@0"});
+    EXPECT_EQ(n.stdoutData, "{\"path\": \"/cpus/cpu@0\", \"properties\": {\"device_type\": \"cpu\", "
+                            "\"compatible\": \"arm,cortex-a53\", \"reg\": [0], \"clock-frequency\": [1200000000]}, "
+                            "\"children\": []}\n");
+
+    auto unsupported = cli({"--json", "list", file});
+    EXPECT_EQ(unsupported.exitCode, 1);
+    EXPECT_NE(unsupported.stderrData.find("--json is not supported by 'list'"), std::string::npos);
+}
