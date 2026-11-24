@@ -7,6 +7,10 @@
 
 #include <cstdlib>
 
+#ifdef HAVE_NLOHMANN_JSON
+#include <nlohmann/json.hpp>
+#endif
+
 using DTE::runProcess;
 using DTE::test::TempDir;
 
@@ -334,3 +338,67 @@ TEST_F(CLITest, GetJson) {
     EXPECT_EQ(unsupported.exitCode, 1);
     EXPECT_NE(unsupported.stderrData.find("--json is not supported by 'list'"), std::string::npos);
 }
+
+#ifdef HAVE_NLOHMANN_JSON
+TEST_F(CLITest, JsonOutputs) {
+    using nlohmann::json;
+    auto parse = [&](std::vector<std::string> args, int expectedExit = 0) {
+        args.insert(args.begin(), "--json");
+        auto r = cli(args);
+        EXPECT_EQ(r.exitCode, expectedExit) << r.stderrData;
+        return json::parse(r.stdoutData);
+    };
+
+    auto info = parse({"info", kData + "/board.dts"});
+    EXPECT_EQ(info["nodes"], 11);
+    EXPECT_EQ(info["memory_reservations"], 2);
+
+    auto valid = parse({"validate", kData + "/addresses.dts"});
+    EXPECT_EQ(valid["valid"], true);
+    EXPECT_EQ(valid["warnings"], 1);
+    EXPECT_EQ(valid["issues"][0]["path"], "/soc@100000000/bridge@20000000/stray@200000");
+    EXPECT_EQ(valid["issues"][0]["property"], "reg");
+    auto invalid = parse({"validate", tmp_.write("e.dts", "/dts-v1/;\n/ { dev { reg = <1>; }; };\n")}, 1);
+    EXPECT_EQ(invalid["valid"], false);
+
+    auto refs = parse({"refs", kData + "/refs.dts", "/interrupt-controller@1000"});
+    ASSERT_EQ(refs["referenced_by"].size(), 2u);
+    EXPECT_EQ(refs["referenced_by"][1]["source"], "/serial@4000");
+    EXPECT_EQ(refs["referenced_by"][1]["args"], (json{0, 33, 4}));
+    EXPECT_TRUE(refs["referenced_by"][1]["problem"].is_null());
+
+    auto memmap = parse({"memmap", kData + "/addresses.dts"});
+    ASSERT_EQ(memmap["regions"].size(), 7u);
+    EXPECT_EQ(memmap["regions"][4]["start"], 0x120000100ULL);
+    EXPECT_EQ(memmap["regions"][4]["path"], "/soc@100000000/bridge@20000000/timer@100");
+    EXPECT_EQ(memmap["untranslated"].size(), 2u);
+
+    auto irqs = parse({"irqs", kData + "/interrupts.dts"});
+    const auto& gic = irqs["controllers"]["/interrupt-controller@1000"];
+    ASSERT_EQ(gic.size(), 7u);
+    EXPECT_EQ(gic[1]["user"], "/serial@3000");
+    EXPECT_EQ(gic[1]["specifier"], (json{0, 33, 4}));
+    EXPECT_EQ(gic[1]["description"], "SPI 33 (hwirq 65), level high");
+
+    auto same = parse({"diff", kData + "/board.dts", kData + "/board.dts"});
+    EXPECT_EQ(same["diff"]["total_changes"], 0);
+    auto changed = parse({"diff", kData + "/board.dts", kData + "/refs.dts"}, 1);
+    EXPECT_GT(changed["diff"]["total_changes"], 0);
+}
+
+TEST_F(CLITest, JsonOverlapsAndSharedLines) {
+    using nlohmann::json;
+    auto o = cli({"--json", "memmap", tmp_.write("o.dts", "/dts-v1/;\n/ { #address-cells = <1>; #size-cells = <1>; "
+                                                          "a@1000 { reg = <0x1000 0x100>; }; b@1080 { reg = <0x1080 0x10>; }; };\n")});
+    auto m = json::parse(o.stdoutData);
+    EXPECT_TRUE(m["regions"][0]["overlaps"].is_null());
+    EXPECT_EQ(m["regions"][1]["overlaps"], "/a@1000");
+
+    auto s = cli({"--json", "irqs", tmp_.write("s.dts", "/dts-v1/;\n/ { intc: intc { interrupt-controller; "
+                                                        "#interrupt-cells = <2>; }; a { interrupt-parent = <&intc>; "
+                                                        "interrupts = <5 4>; }; b { interrupt-parent = <&intc>; "
+                                                        "interrupts = <5 8>; }; };\n")});
+    auto i = json::parse(s.stdoutData);
+    EXPECT_EQ(i["controllers"]["/intc"][1]["shared_with"], "/a");
+}
+#endif

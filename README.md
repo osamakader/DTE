@@ -227,6 +227,9 @@ the extension (`.dtb`/`.dtbo` or `.dts`/`.dtsi`/`.dtso`).
 
 #### Global options
 - `-I DIR`, `--include DIR` - add an include directory for DTS sources (repeatable)
+- `--json` - JSON output on stdout for `get`, `info`, `validate`, `diff`,
+  `refs`, `memmap` and `irqs` (exit codes unchanged; values use the export
+  schema's mapping)
 - `--no-color` - disable colored output (`NO_COLOR=1` also works)
 
 Status messages (`INFO:`, `ERROR:`, ...) go to stderr, so stdout can be piped.
@@ -248,6 +251,18 @@ List the structure of a device tree.
 - Property display
 - Optional path filtering
 - Hierarchical output
+
+#### `get <filename> <path|alias> [property]`
+Print one property value in DTS syntax (nothing for an empty property), or
+with no property the node's properties and its children (`name/`). Prints
+nothing else, and exits 1 if the node or property does not exist, so it can be
+used in scripts:
+
+```bash
+model=$(./bin/dte-cli get board.dtb / model)
+./bin/dte-cli get board.dtb serial0 status          # aliases work too
+./bin/dte-cli --json get board.dtb /soc/serial@10000000
+```
 
 #### `refs <filename> [path]`
 Show phandle references. Without a path, lists every reference in the tree

@@ -154,7 +154,7 @@ int CLIApp::run() {
     }
     
     // Commands that can print JSON
-    static const std::set<std::string> jsonCommands = {"get"};
+    static const std::set<std::string> jsonCommands = {"get", "info", "validate", "diff", "refs", "memmap", "irqs"};
     if (json_ && !jsonCommands.count(command)) {
         printError("--json is not supported by '" + command + "'");
         return EXIT_FAILURE;
@@ -281,7 +281,7 @@ void CLIApp::printUsage() const {
     
     std::cout << "\n" << Colors::BOLD << "Global options:" << Colors::RESET << "\n";
     std::cout << "  -I, --include DIR  Add an include directory for DTS sources (repeatable)\n";
-    std::cout << "  --json             Machine-readable output (get, ...)\n";
+    std::cout << "  --json             JSON output (get, info, validate, diff, refs, memmap, irqs)\n";
     std::cout << "  --no-color         Disable colored output (also: NO_COLOR=1)\n";
     std::cout << "\nUse '" << programName_ << " help <command>' for detailed help.\n";
     std::cout << "Use '" << programName_ << " --version' to show version information.\n";
@@ -453,7 +453,11 @@ int CLIApp::handleDiff(const std::vector<std::string>& args) {
     
     printInfo("Generating diff...");
     DeviceTreeDiff diff(baseTree, overlayTree);
-    printDiffResults(diff);
+    if (json_) {
+        std::cout << diff.exportAsJSON();
+    } else {
+        printDiffResults(diff);
+    }
     
     return diff.getTotalChanges() > 0 ? DIFF_EXIT_DIFFERENT : DIFF_EXIT_SAME;
 }
@@ -637,6 +641,26 @@ bool CLIApp::loadDeviceTree(const std::string& filename) {
 
 void CLIApp::printDeviceTreeInfo() const {
     if (!deviceTree_) return;
+
+    if (json_) {
+        size_t nodes = 0, properties = 0;
+        std::function<void(const std::shared_ptr<DeviceTreeNode>&)> count = [&](const std::shared_ptr<DeviceTreeNode>& n) {
+            ++nodes;
+            properties += n->getPropertyCount();
+            for (const auto& c : n->getChildren()) count(c);
+        };
+        count(deviceTree_->getRoot());
+        std::error_code ec;
+        const auto& file = deviceTree_->getSourceFile();
+        const bool regular = std::filesystem::is_regular_file(file, ec);
+        std::cout << "{\"file\": " << detail::jsonQuote(file) << ", \"nodes\": " << nodes
+                  << ", \"properties\": " << properties
+                  << ", \"memory_reservations\": " << deviceTree_->getMemoryReservations().size()
+                  << ", \"file_size\": ";
+        if (regular) std::cout << std::filesystem::file_size(file, ec); else std::cout << "null";
+        std::cout << "}\n";
+        return;
+    }
     
     std::cout << Colors::BOLD << "Device Tree Information:" << Colors::RESET << "\n";
     std::cout << "Source file: " << Colors::CYAN << deviceTree_->getSourceFile() << Colors::RESET << "\n";
@@ -673,6 +697,22 @@ bool CLIApp::printValidationResults() const {
     if (!deviceTree_) return false;
 
     const auto issues = deviceTree_->check();
+    if (json_) {
+        using detail::jsonQuote;
+        size_t errors = 0;
+        for (const auto& i : issues) errors += i.isError();
+        std::cout << "{\"valid\": " << (errors == 0 ? "true" : "false") << ", \"errors\": " << errors
+                  << ", \"warnings\": " << issues.size() - errors << ", \"issues\": [";
+        for (size_t k = 0; k < issues.size(); ++k) {
+            const auto& i = issues[k];
+            std::cout << (k ? ", " : "") << "{\"severity\": " << jsonQuote(i.isError() ? "error" : "warning")
+                      << ", \"path\": " << jsonQuote(i.path) << ", \"property\": "
+                      << (i.property.empty() ? "null" : jsonQuote(i.property)) << ", \"message\": "
+                      << jsonQuote(i.message) << "}";
+        }
+        std::cout << "]}\n";
+        return errors == 0;
+    }
     size_t errors = 0;
     for (const auto& issue : issues) {
         if (issue.isError()) ++errors;
@@ -825,6 +865,40 @@ int CLIApp::handleRefs(const std::vector<std::string>& args) {
     }
 
     const auto refs = deviceTree_->references();
+    if (json_) {
+        using detail::jsonQuote;
+        auto refJson = [&](const PhandleReference& r) {
+            std::ostringstream os;
+            os << "{\"source\": " << jsonQuote(r.source->getFullPath()) << ", \"property\": "
+               << jsonQuote(r.property) << ", \"target\": "
+               << (r.target ? jsonQuote(r.target->getFullPath()) : std::string("null")) << ", \"args\": [";
+            for (size_t i = 0; i < r.args.size(); ++i) os << (i ? ", " : "") << r.args[i];
+            os << "], \"problem\": " << (r.problem.empty() ? std::string("null") : jsonQuote(r.problem)) << "}";
+            return os.str();
+        };
+        auto list = [&](const std::vector<PhandleReference>& v) {
+            std::string out = "[";
+            for (size_t i = 0; i < v.size(); ++i) out += (i ? ", " : "") + refJson(v[i]);
+            return out + "]";
+        };
+        if (args.size() == 1) {
+            std::cout << "{\"references\": " << list(refs) << "}\n";
+            return EXIT_SUCCESS;
+        }
+        auto node = resolveNode(args[1]);
+        if (!node) {
+            printError("Node not found: " + args[1]);
+            return EXIT_FAILURE;
+        }
+        std::vector<PhandleReference> from, to;
+        for (const auto& r : refs) {
+            if (r.source == node) from.push_back(r);
+            if (r.target == node) to.push_back(r);
+        }
+        std::cout << "{\"path\": " << jsonQuote(node->getFullPath()) << ", \"refers_to\": " << list(from)
+                  << ", \"referenced_by\": " << list(to) << "}\n";
+        return EXIT_SUCCESS;
+    }
     auto print = [&](const PhandleReference& r, bool withSource) {
         const bool broken = !r.problem.empty();
         std::cout << "  " << (broken ? Colors::RED : "") << formatReference(r, withSource)
@@ -837,7 +911,7 @@ int CLIApp::handleRefs(const std::vector<std::string>& args) {
         return EXIT_SUCCESS;
     }
 
-    auto node = deviceTree_->findNodeByPath(args[1]);
+    auto node = resolveNode(args[1]);
     if (!node) {
         printError("Node not found: " + args[1]);
         return EXIT_FAILURE;
@@ -957,8 +1031,41 @@ int CLIApp::handleMemmap(const std::vector<std::string>& args) {
     std::stable_sort(regions.begin(), regions.end(),
                      [](const Region& a, const Region& b) { return a.start < b.start; });
 
+    // Overlaps: a region starting inside the furthest-reaching earlier one
+    std::vector<std::string> overlapsWith(regions.size());
+    size_t overlaps = 0;
+    const Region* furthest = nullptr;
+    auto lastByte = [](const Region& r) { return r.start + (r.hasSize && r.size ? r.size - 1 : 0); };
+    for (size_t i = 0; i < regions.size(); ++i) {
+        const auto& r = regions[i];
+        if (furthest && r.start <= lastByte(*furthest) && r.size && furthest->size && furthest->path != r.path) {
+            overlapsWith[i] = furthest->path;
+            ++overlaps;
+        }
+        if (!furthest || lastByte(r) > lastByte(*furthest)) furthest = &r;
+    }
+
+    if (json_) {
+        using detail::jsonQuote;
+        std::cout << "{\"regions\": [";
+        for (size_t i = 0; i < regions.size(); ++i) {
+            const auto& r = regions[i];
+            std::cout << (i ? ", " : "") << "{\"start\": " << r.start << ", \"end\": " << lastByte(r)
+                      << ", \"size\": " << (r.hasSize ? std::to_string(r.size) : std::string("null"))
+                      << ", \"path\": " << jsonQuote(r.path) << ", \"overlaps\": "
+                      << (overlapsWith[i].empty() ? std::string("null") : jsonQuote(overlapsWith[i])) << "}";
+        }
+        std::cout << "], \"untranslated\": [";
+        for (size_t i = 0; i < unmapped.size(); ++i) {
+            std::cout << (i ? ", " : "") << "{\"path\": " << jsonQuote(unmapped[i].first) << ", \"reason\": "
+                      << jsonQuote(unmapped[i].second) << "}";
+        }
+        std::cout << "]}\n";
+        return EXIT_SUCCESS;
+    }
+
     uint64_t maxAddress = 0;
-    for (const auto& r : regions) maxAddress = std::max(maxAddress, r.start + (r.size ? r.size - 1 : 0));
+    for (const auto& r : regions) maxAddress = std::max(maxAddress, lastByte(r));
     const int width = maxAddress > 0xffffffffULL ? 16 : 8;
     auto hex = [width](uint64_t v) {
         std::ostringstream os;
@@ -967,23 +1074,17 @@ int CLIApp::handleMemmap(const std::vector<std::string>& args) {
     };
 
     std::cout << Colors::BOLD << "Memory map (" << regions.size() << " regions):" << Colors::RESET << "\n";
-    size_t overlaps = 0;
-    const Region* furthest = nullptr; // region reaching highest so far
-    for (const auto& r : regions) {
-        const uint64_t end = r.hasSize && r.size ? r.start + r.size - 1 : r.start;
-        std::cout << "  " << hex(r.start) << "-" << hex(end) << "  "
-                  << std::setw(width + 2) << std::setfill(' ') << std::left
-                  << (r.hasSize ? "0x" + [&] { std::ostringstream os; os << std::hex << r.size; return os.str(); }() : "-")
-                  << std::right << "  " << Colors::GREEN << r.path << Colors::RESET;
-        if (furthest) {
-            const uint64_t furthestEnd = furthest->start + (furthest->size ? furthest->size - 1 : 0);
-            if (r.start <= furthestEnd && r.size && furthest->size && furthest->path != r.path) {
-                std::cout << "  " << Colors::YELLOW << "overlaps " << furthest->path << Colors::RESET;
-                ++overlaps;
-            }
+    for (size_t i = 0; i < regions.size(); ++i) {
+        const auto& r = regions[i];
+        std::ostringstream size;
+        if (r.hasSize) size << "0x" << std::hex << r.size; else size << "-";
+        std::cout << "  " << hex(r.start) << "-" << hex(lastByte(r)) << "  " << std::setw(width + 2)
+                  << std::setfill(' ') << std::left << size.str() << std::right << "  " << Colors::GREEN << r.path
+                  << Colors::RESET;
+        if (!overlapsWith[i].empty()) {
+            std::cout << "  " << Colors::YELLOW << "overlaps " << overlapsWith[i] << Colors::RESET;
         }
         std::cout << "\n";
-        if (!furthest || end > furthest->start + (furthest->size ? furthest->size - 1 : 0)) furthest = &r;
     }
 
     if (!unmapped.empty()) {
@@ -1047,10 +1148,52 @@ int CLIApp::handleIrqs(const std::vector<std::string>& args) {
     };
     walk(deviceTree_->getRoot());
 
+    // Sort each controller's lines; mark lines shared with the previous
+    // entry (same cells apart from the trigger/flags cell)
+    auto lineOf = [](const std::vector<uint32_t>& spec) {
+        return spec.size() >= 2 ? std::vector<uint32_t>(spec.begin(), spec.end() - 1) : spec;
+    };
+    std::map<std::string, std::vector<std::string>> sharedWith;
     size_t total = 0, shared = 0;
     for (auto& [controller, lines] : byController) {
         std::stable_sort(lines.begin(), lines.end(),
                          [](const Line& a, const Line& b) { return a.specifier < b.specifier; });
+        auto& marks = sharedWith[controller];
+        marks.assign(lines.size(), "");
+        for (size_t i = 1; i < lines.size(); ++i) {
+            if (lineOf(lines[i - 1].specifier) == lineOf(lines[i].specifier)) {
+                marks[i] = lines[i - 1].user;
+                ++shared;
+            }
+        }
+        total += lines.size();
+    }
+
+    if (json_) {
+        using detail::jsonQuote;
+        std::cout << "{\"controllers\": {";
+        bool firstController = true;
+        for (const auto& [controller, lines] : byController) {
+            std::cout << (firstController ? "" : ", ") << jsonQuote(controller) << ": [";
+            firstController = false;
+            for (size_t i = 0; i < lines.size(); ++i) {
+                const auto& l = lines[i];
+                std::cout << (i ? ", " : "") << "{\"user\": " << jsonQuote(l.user) << ", \"specifier\": [";
+                for (size_t k = 0; k < l.specifier.size(); ++k) std::cout << (k ? ", " : "") << l.specifier[k];
+                std::cout << "], \"description\": " << jsonQuote(l.description) << ", \"shared_with\": "
+                          << (sharedWith[controller][i].empty() ? std::string("null")
+                                                                : jsonQuote(sharedWith[controller][i]))
+                          << "}";
+            }
+            std::cout << "]";
+        }
+        std::cout << "}, \"unresolved\": [";
+        for (size_t i = 0; i < unresolved.size(); ++i) std::cout << (i ? ", " : "") << jsonQuote(unresolved[i]);
+        std::cout << "]}\n";
+        return EXIT_SUCCESS;
+    }
+
+    for (const auto& [controller, lines] : byController) {
         std::cout << Colors::BOLD << controller << " (" << lines.size() << "):" << Colors::RESET << "\n";
         size_t width = 0;
         for (const auto& l : lines) width = std::max(width, l.description.size());
@@ -1058,17 +1201,11 @@ int CLIApp::handleIrqs(const std::vector<std::string>& args) {
             const auto& l = lines[i];
             std::cout << "  " << std::left << std::setw(static_cast<int>(width)) << l.description << std::right
                       << "  " << Colors::GREEN << l.user << Colors::RESET;
-            // Same line (all cells but the trigger/flags cell) as the previous entry
-            auto line = [](const std::vector<uint32_t>& s) {
-                return s.size() >= 2 ? std::vector<uint32_t>(s.begin(), s.end() - 1) : s;
-            };
-            if (i > 0 && line(lines[i - 1].specifier) == line(l.specifier)) {
-                std::cout << "  " << Colors::YELLOW << "shared with " << lines[i - 1].user << Colors::RESET;
-                ++shared;
+            if (!sharedWith[controller][i].empty()) {
+                std::cout << "  " << Colors::YELLOW << "shared with " << sharedWith[controller][i] << Colors::RESET;
             }
             std::cout << "\n";
         }
-        total += lines.size();
     }
     if (!unresolved.empty()) {
         std::cout << "\n" << Colors::BOLD << "Unresolved (" << unresolved.size() << "):" << Colors::RESET << "\n";
